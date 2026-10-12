@@ -85,6 +85,8 @@ async function bootstrap() {
     try {
       console.log('🤖 Connecting to Telegram Bot API...');
       botService = new TelegramBotService(botToken);
+      // Purge any lingering webhooks or old bot script listeners
+      await botService.bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
       botService.bot.launch({
         allowedUpdates: ['message', 'callback_query'],
         dropPendingUpdates: true,
