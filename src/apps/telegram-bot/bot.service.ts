@@ -289,34 +289,42 @@ export class TelegramBotService {
     // 6. Interactive Action Handlers
     this.bot.action('menu_signals', async (ctx) => {
       await ctx.answerCbQuery();
+      await ctx.deleteMessage().catch(() => {});
       await this.renderSignals(ctx);
     });
     this.bot.action('menu_markets', async (ctx) => {
       await ctx.answerCbQuery();
+      await ctx.deleteMessage().catch(() => {});
       await this.renderMarkets(ctx);
     });
     this.bot.action('menu_strategies', async (ctx) => {
       await ctx.answerCbQuery();
+      await ctx.deleteMessage().catch(() => {});
       await this.renderStrategies(ctx);
     });
     this.bot.action('menu_subscribe', async (ctx) => {
       await ctx.answerCbQuery();
+      await ctx.deleteMessage().catch(() => {});
       await this.renderSubscription(ctx);
     });
     this.bot.action('menu_performance', async (ctx) => {
       await ctx.answerCbQuery();
+      await ctx.deleteMessage().catch(() => {});
       await this.renderPerformance(ctx);
     });
     this.bot.action('menu_settings', async (ctx) => {
       await ctx.answerCbQuery();
+      await ctx.deleteMessage().catch(() => {});
       await this.renderSettings(ctx);
     });
     this.bot.action('menu_help', async (ctx) => {
       await ctx.answerCbQuery();
+      await ctx.deleteMessage().catch(() => {});
       await this.renderHelp(ctx);
     });
     this.bot.action('menu_scan_status', async (ctx) => {
       await ctx.answerCbQuery();
+      await ctx.deleteMessage().catch(() => {});
       await this.renderScanStatus(ctx);
     });
 

@@ -27,18 +27,38 @@ export class TwelveDataProvider implements MarketDataProvider {
     }
   }
 
+  private rateLimitCooldownUntil = 0;
+
+  private formatSymbol(symbol: string): string {
+    const clean = symbol.trim().toUpperCase().replace('/', '');
+    if (clean.length === 6) {
+      return `${clean.slice(0, 3)}/${clean.slice(3)}`;
+    }
+    return symbol;
+  }
+
   async fetchCandles(symbol: string, timeframe: string, limit = 100): Promise<Candle[]> {
+    if (Date.now() < this.rateLimitCooldownUntil) {
+      return [];
+    }
     try {
+      const formattedSymbol = this.formatSymbol(symbol);
       const interval = this.mapTimeframe(timeframe);
       const res = await axios.get(`${this.baseUrl}/time_series`, {
         params: {
-          symbol,
+          symbol: formattedSymbol,
           interval,
           outputsize: limit,
           apikey: this.apiKey,
         },
         timeout: 6000,
       });
+
+      if (res.data?.code === 429) {
+        console.warn('⚠️ TwelveData API credit limit reached (8 credits/min). Activating 60s cooldown.');
+        this.rateLimitCooldownUntil = Date.now() + 60 * 1000;
+        return [];
+      }
 
       if (!res.data || !res.data.values || !Array.isArray(res.data.values)) {
         return [];
@@ -61,14 +81,24 @@ export class TwelveDataProvider implements MarketDataProvider {
   }
 
   async fetchQuote(symbol: string): Promise<Quote | null> {
+    if (Date.now() < this.rateLimitCooldownUntil) {
+      return null;
+    }
     try {
+      const formattedSymbol = this.formatSymbol(symbol);
       const res = await axios.get(`${this.baseUrl}/quote`, {
         params: {
-          symbol,
+          symbol: formattedSymbol,
           apikey: this.apiKey,
         },
         timeout: 5000,
       });
+
+      if (res.data?.code === 429) {
+        console.warn('⚠️ TwelveData API credit limit reached (8 credits/min). Activating 60s cooldown.');
+        this.rateLimitCooldownUntil = Date.now() + 60 * 1000;
+        return null;
+      }
 
       if (!res.data || !res.data.close) return null;
 
