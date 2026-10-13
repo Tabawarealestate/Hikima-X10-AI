@@ -77,15 +77,26 @@ export class CryptoMusService {
         timeout: 8000,
       });
 
-      return res.data;
-    } catch (err: any) {
-      // Fallback structured object
+      if (res.data?.result?.url) {
+        return res.data;
+      }
+
       return {
         result: {
           uuid: `inv_${params.orderId}`,
           order_id: params.orderId,
           amount: params.amount,
-          url: `https://pay.cryptomus.com/pay/${params.orderId}`,
+          url: `https://pay.cryptomus.com/pay/${this.merchantId}?order_id=${params.orderId}&amount=${params.amount}`,
+          status: 'pending',
+        },
+      };
+    } catch (err: any) {
+      return {
+        result: {
+          uuid: `inv_${params.orderId}`,
+          order_id: params.orderId,
+          amount: params.amount,
+          url: `https://pay.cryptomus.com/pay/${this.merchantId}?order_id=${params.orderId}&amount=${params.amount}`,
           status: 'pending',
         },
       };

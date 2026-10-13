@@ -180,10 +180,11 @@ export class TelegramBotService {
         include: { user: { include: { preferences: true } } },
       });
 
-      if (dbUser?.user.preferences) {
-        await prisma.userPreference.update({
-          where: { id: dbUser.user.preferences.id },
-          data: { language: selectedLang },
+      if (dbUser) {
+        await prisma.userPreference.upsert({
+          where: { userId: dbUser.userId },
+          update: { language: selectedLang },
+          create: { userId: dbUser.userId, language: selectedLang },
         });
       }
 
@@ -210,10 +211,11 @@ export class TelegramBotService {
         include: { user: { include: { preferences: true } } },
       });
 
-      if (dbUser?.user.preferences) {
-        await prisma.userPreference.update({
-          where: { id: dbUser.user.preferences.id },
-          data: { timezone: selectedTz },
+      if (dbUser) {
+        await prisma.userPreference.upsert({
+          where: { userId: dbUser.userId },
+          update: { timezone: selectedTz },
+          create: { userId: dbUser.userId, timezone: selectedTz },
         });
       }
 
@@ -229,11 +231,13 @@ export class TelegramBotService {
       });
 
       let currentVal = true;
-      if (dbUser?.user.preferences) {
-        currentVal = !dbUser.user.preferences.newsFilterOn;
-        await prisma.userPreference.update({
-          where: { id: dbUser.user.preferences.id },
-          data: { newsFilterOn: currentVal },
+      if (dbUser) {
+        const pref = await prisma.userPreference.findUnique({ where: { userId: dbUser.userId } });
+        currentVal = pref ? !pref.newsFilterOn : false;
+        await prisma.userPreference.upsert({
+          where: { userId: dbUser.userId },
+          update: { newsFilterOn: currentVal },
+          create: { userId: dbUser.userId, newsFilterOn: currentVal },
         });
       }
 
