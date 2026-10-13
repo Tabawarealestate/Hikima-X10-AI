@@ -246,6 +246,63 @@ export class TelegramBotService {
       await this.cleanAndReply(ctx, `🔔 High-Impact News Filter updated: ${statusText}`);
     });
 
+    this.bot.action('edit_timeframes', async (ctx) => {
+      await ctx.answerCbQuery('Timeframes');
+      await this.cleanAndReply(ctx, '⏱ Select Your Preferred Signal Timeframe Filter:', Markup.inlineKeyboard([
+        [Markup.button.callback('M15 (15 Min)', 'set_tf_M15'), Markup.button.callback('H1 (1 Hour)', 'set_tf_H1')],
+        [Markup.button.callback('H4 (4 Hours)', 'set_tf_H4'), Markup.button.callback('All Timeframes', 'set_tf_ALL')],
+      ]));
+    });
+
+    this.bot.action(/^set_tf_(M15|H1|H4|ALL)$/, async (ctx) => {
+      const tfChoice = ctx.match[1];
+      const tgUser = ctx.from;
+      const dbUser = await prisma.telegramUser.findUnique({
+        where: { telegramId: BigInt(tgUser.id) },
+        include: { user: true },
+      });
+
+      if (dbUser) {
+        const val = tfChoice === 'ALL' ? 'M15,H1,H4,D1' : tfChoice;
+        await prisma.userPreference.upsert({
+          where: { userId: dbUser.userId },
+          update: { selectedTimeframes: val },
+          create: { userId: dbUser.userId, selectedTimeframes: val },
+        });
+      }
+
+      await ctx.answerCbQuery(`Timeframe: ${tfChoice}`);
+      await this.cleanAndReply(ctx, `⏱ Preferred Signal Timeframes updated to: ${tfChoice}.`);
+    });
+
+    this.bot.action('edit_min_score', async (ctx) => {
+      await ctx.answerCbQuery('Quality Threshold');
+      await this.cleanAndReply(ctx, '⭐ Select Minimum Signal Quality Score Threshold:', Markup.inlineKeyboard([
+        [Markup.button.callback('75+ (Standard)', 'set_min_score_75'), Markup.button.callback('85+ (High Confluence)', 'set_min_score_85')],
+        [Markup.button.callback('90+ (Elite Only)', 'set_min_score_90')],
+      ]));
+    });
+
+    this.bot.action(/^set_min_score_(75|85|90)$/, async (ctx) => {
+      const minScore = parseInt(ctx.match[1], 10);
+      const tgUser = ctx.from;
+      const dbUser = await prisma.telegramUser.findUnique({
+        where: { telegramId: BigInt(tgUser.id) },
+        include: { user: true },
+      });
+
+      if (dbUser) {
+        await prisma.userPreference.upsert({
+          where: { userId: dbUser.userId },
+          update: { minQualityScore: minScore },
+          create: { userId: dbUser.userId, minQualityScore: minScore },
+        });
+      }
+
+      await ctx.answerCbQuery(`Min Score: ${minScore}`);
+      await this.cleanAndReply(ctx, `⭐ Minimum Quality Score Threshold updated to: ${minScore}/100.`);
+    });
+
     // 3. Channel Verification Action
     this.bot.action('verify_channel', async (ctx) => {
       await ctx.answerCbQuery();
@@ -742,21 +799,73 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
   }
 
   private async renderSignals(ctx: any) {
-    const lang = await this.getUserLang(ctx.from.id);
-    const activeSignals = await prisma.signal.findMany({
-      where: { status: { in: ['SENT', 'ACTIVE', 'ENTRY_REACHED'] } },
-      include: { marketSymbol: true, strategy: true },
-      take: 5,
+    const tgUser = ctx.from;
+    const lang = await this.getUserLang(tgUser.id);
+
+    const dbUser = await prisma.telegramUser.findUnique({
+      where: { telegramId: BigInt(tgUser.id) },
+      include: {
+        user: {
+          include: {
+            watchlist: { include: { marketSymbol: true } },
+            preferences: true,
+          },
+        },
+      },
     });
 
-    if (activeSignals.length === 0) {
-      return this.cleanAndReply(ctx, '📊 ACTIVE SIGNALS:\n\nNo active signals currently open. Continuous market analysis running.', this.getBottomReplyKeyboard(lang));
+    const isPremium = dbUser?.user.accessType === 'PREMIUM';
+    const userWatchlistSymbolIds = new Set(dbUser?.user.watchlist.map((w) => w.symbolId) || []);
+    const prefStrategy = dbUser?.user.preferences?.preferredStrategy;
+
+    const allActive = await prisma.signal.findMany({
+      where: { status: { in: ['SENT', 'ACTIVE', 'ENTRY_REACHED'] } },
+      include: { marketSymbol: true, strategy: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    // Deduplicate active signals by marketSymbol.id so user sees unique active setups
+    const uniqueBySymbol = new Map<string, typeof allActive[0]>();
+    for (const sig of allActive) {
+      if (!uniqueBySymbol.has(sig.symbolId)) {
+        uniqueBySymbol.set(sig.symbolId, sig);
+      }
     }
 
-    let text = `📊 ACTIVE SIGNALS (${activeSignals.length}):\n\n`;
-    for (const s of activeSignals) {
+    let userFilteredSignals = Array.from(uniqueBySymbol.values());
+
+    // 1. Free Tier Limitation
+    if (!isPremium) {
+      userFilteredSignals = userFilteredSignals.filter((s) =>
+        ['EURUSD', 'NZDUSD'].includes(s.marketSymbol.symbol.replace('/', '').toUpperCase())
+      );
+    }
+
+    // 2. Watchlist Filter
+    if (userWatchlistSymbolIds.size > 0) {
+      userFilteredSignals = userFilteredSignals.filter((s) => userWatchlistSymbolIds.has(s.symbolId));
+    }
+
+    // 3. Strategy Filter
+    if (prefStrategy && prefStrategy !== 'AI_CONSENSUS' && prefStrategy !== 'ALL') {
+      const prefUpper = prefStrategy.toUpperCase();
+      userFilteredSignals = userFilteredSignals.filter(
+        (s) => s.strategy.code.toUpperCase().includes(prefUpper) || s.strategy.name.toUpperCase().includes(prefUpper)
+      );
+    }
+
+    if (userFilteredSignals.length === 0) {
+      return this.cleanAndReply(
+        ctx,
+        '📊 ACTIVE SIGNALS:\n\nNo active signals currently match your watchlist and strategy preferences. Continuous 24/7 market analysis running.',
+        this.getBottomReplyKeyboard(lang)
+      );
+    }
+
+    let text = `📊 YOUR ACTIVE SIGNALS (${userFilteredSignals.length}):\n\n`;
+    for (const s of userFilteredSignals) {
       const progressBar = this.getProgressBar(s.qualityScore);
-      text += `• ${s.marketSymbol.symbol} (${s.direction})\n  Strategy: ${s.strategy.name}\n  Quality: ${s.qualityScore}/100 ${progressBar}\n  Status: ${s.status}\n\n`;
+      text += `• ${s.marketSymbol.symbol} (${s.direction})\n  Strategy: ${s.strategy.name}\n  Timeframe: ${s.timeframe}\n  Entry: ${s.entryMin.toFixed(2)} - ${s.entryMax.toFixed(2)}\n  Quality: ${s.qualityScore}/100 ${progressBar}\n  Status: ${s.status}\n\n`;
     }
     await this.cleanAndReply(ctx, text, this.getBottomReplyKeyboard(lang));
   }
@@ -845,9 +954,23 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
   }
 
   private async renderSettings(ctx: any) {
-    const lang = await this.getUserLang(ctx.from.id);
-    await this.cleanAndReply(ctx, `⚙️ USER SETTINGS & PROFILE CUSTOMIZATION:\n\n• Current Language: ${lang.toUpperCase()}\n• Timezone: UTC\n• News Filter: ACTIVE (High Impact)\n• Mandatory Channel: Joined @hikimaaipalace\n\nProfile Options:`, Markup.inlineKeyboard([
-      [Markup.button.callback('🌐 Change Language', 'edit_lang'), Markup.button.callback('🕒 Change Timezone', 'edit_tz')],
+    const tgUser = ctx.from;
+    const lang = await this.getUserLang(tgUser.id);
+    const dbUser = await prisma.telegramUser.findUnique({
+      where: { telegramId: BigInt(tgUser.id) },
+      include: { user: { include: { preferences: true } } },
+    });
+
+    const prefs = dbUser?.user.preferences;
+    const timeframes = prefs?.selectedTimeframes || 'M15,H1,H4';
+    const minScore = prefs?.minQualityScore || 75;
+    const newsFilter = prefs?.newsFilterOn ? 'ON' : 'OFF';
+
+    const text = `⚙️ USER SETTINGS & PROFILE CUSTOMIZATION:\n\n• Current Language: ${lang.toUpperCase()}\n• Display Timezone: ${prefs?.timezone || 'UTC'}\n• Enabled Timeframes: ${timeframes}\n• Min Quality Score: ${minScore}/100\n• News Filter: ${newsFilter}\n• Official Channel: Joined @hikimaaipalace\n\nSelect an option below to customize your signal delivery:`;
+
+    await this.cleanAndReply(ctx, text, Markup.inlineKeyboard([
+      [Markup.button.callback('🌐 Language', 'edit_lang'), Markup.button.callback('🕒 Timezone', 'edit_tz')],
+      [Markup.button.callback('⏱ Timeframes', 'edit_timeframes'), Markup.button.callback('⭐ Quality Score', 'edit_min_score')],
       [Markup.button.callback('🔔 Toggle News Filter', 'toggle_news_filter')],
     ]));
   }
@@ -880,46 +1003,46 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
   async sendFormattedSignal(chatId: string | number, signal: any): Promise<boolean> {
     try {
       const isBuy = signal.direction === 'BUY';
-      const directionEmoji = isBuy ? '🟢 BUY SIGNAL' : '🔴 SELL SIGNAL';
+      const directionEmoji = isBuy ? '🟢 BUY' : '🔴 SELL';
       const progressBar = this.getProgressBar(signal.qualityScore || 86);
+      const symbol = signal.marketSymbol ? signal.marketSymbol.symbol : signal.symbol;
+      const digits = symbol.includes('JPY') ? 3 : symbol.includes('XAU') ? 2 : 5;
 
-      const formattedMessage = `━━━━━━━━━━━━━━━━━━
+      const formattedMessage = `━━━━━━━━━━━━━━━━━━━━
 🔥 HIKIMA X10 AI
-━━━━━━━━━━━━━━━━━━
+📊 TRADE SIGNAL
+━━━━━━━━━━━━━━━━━━━━
 
+🪙 PAIR: ${symbol}
 ${directionEmoji}
 
-Asset: ${signal.marketSymbol ? signal.marketSymbol.symbol : signal.symbol}
-Strategy: ${signal.strategy ? signal.strategy.name : signal.strategyName}
-Session: ${signal.session || 'London/New York'}
-Timeframe: ${signal.timeframe}
+📌 Strategy: ${signal.strategy ? signal.strategy.name : signal.strategyName}
+⏱ Timeframe: ${signal.timeframe}
+🕐 Signal Time: ${new Date().toISOString().replace('T', ' ').slice(0, 16)} UTC
 
-Entry Zone:
-${signal.entryMin.toFixed(2)} – ${signal.entryMax.toFixed(2)}
+🎯 Entry Zone:
+${signal.entryMin.toFixed(digits)} – ${signal.entryMax.toFixed(digits)}
 
-Stop Loss:
-${signal.stopLoss.toFixed(2)}
+🛑 Stop Loss:
+${signal.stopLoss.toFixed(digits)}
 
-Take Profit:
-TP1: ${signal.tp1.toFixed(2)}
-TP2: ${signal.tp2.toFixed(2)}
-TP3: ${signal.tp3.toFixed(2)}
+🎯 Take Profit 1: ${signal.tp1.toFixed(digits)}
+🎯 Take Profit 2: ${signal.tp2.toFixed(digits)}
+🎯 Take Profit 3: ${signal.tp3 ? signal.tp3.toFixed(digits) : 'N/A'}
 
-Risk/Reward:
+📐 Risk/Reward:
 ${signal.riskReward || '1:1.5 / 1:2.5 / 1:4.0'}
 
-Signal Quality:
+⭐ Quality Score:
 ${signal.qualityScore || 86}/100 ${progressBar}
 
-Why:
+🧠 Confluence & Setup:
 ${(signal.reasoning || []).map((r: string) => `• ${r}`).join('\n')}
 
-Status:
-🟢 ACTIVE
+📍 Status: WAITING FOR ENTRY
 
-━━━━━━━━━━━━━━━━━━
-Hikima X10 AI
-━━━━━━━━━━━━━━━━━━`;
+#Signal_${(signal.id || '12345').slice(0, 8)}
+━━━━━━━━━━━━━━━━━━━━`;
 
       await this.bot.telegram.sendMessage(chatId, formattedMessage);
       return true;

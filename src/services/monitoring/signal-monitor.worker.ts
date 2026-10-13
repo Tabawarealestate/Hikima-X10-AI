@@ -108,14 +108,35 @@ export class SignalMonitoringWorker {
       notificationMsg = `⚪ ${signal.marketSymbol.symbol} SIGNAL EXPIRED: Entry zone not reached within 24 hours.`;
     }
 
-    // If state changed, update database & emit event
+    // If state changed, verify this event hasn't already been emitted for this signal ID
     if (newStatus !== prevStatus) {
+      const monitoringRecord = signal.monitoring;
+      if (
+        (newStatus === 'ENTRY_REACHED' && monitoringRecord?.isNotifiedEntry) ||
+        (newStatus === 'TP1_HIT' && monitoringRecord?.isNotifiedTp1) ||
+        (newStatus === 'TP2_HIT' && monitoringRecord?.isNotifiedTp2) ||
+        (newStatus === 'TP3_HIT' && monitoringRecord?.isNotifiedTp3) ||
+        (newStatus === 'SL_HIT' && monitoringRecord?.isNotifiedSl)
+      ) {
+        return null; // Event already notified
+      }
+
+      const existingEvent = await prisma.signalEvent.findFirst({
+        where: { signalId: signal.id, eventType: newStatus },
+      });
+
+      if (existingEvent) {
+        return null;
+      }
+
+      const isTerminal = ['TP3_HIT', 'SL_HIT', 'EXPIRED', 'INVALIDATED'].includes(newStatus);
+
       await prisma.$transaction([
         prisma.signal.update({
           where: { id: signal.id },
           data: {
             status: newStatus,
-            closedAt: ['TP3_HIT', 'SL_HIT', 'EXPIRED', 'INVALIDATED'].includes(newStatus) ? new Date() : undefined,
+            closedAt: isTerminal ? new Date() : undefined,
             result: ['TP1_HIT', 'TP2_HIT', 'TP3_HIT'].includes(newStatus)
               ? 'WIN'
               : newStatus === 'SL_HIT'
@@ -135,12 +156,25 @@ export class SignalMonitoringWorker {
         }),
         prisma.signalMonitoring.upsert({
           where: { signalId: signal.id },
-          update: { currentPrice, lastCheckedAt: new Date() },
+          update: {
+            currentPrice,
+            lastCheckedAt: new Date(),
+            isNotifiedEntry: newStatus === 'ENTRY_REACHED' ? true : undefined,
+            isNotifiedTp1: newStatus === 'TP1_HIT' ? true : undefined,
+            isNotifiedTp2: newStatus === 'TP2_HIT' ? true : undefined,
+            isNotifiedTp3: newStatus === 'TP3_HIT' ? true : undefined,
+            isNotifiedSl: newStatus === 'SL_HIT' ? true : undefined,
+          },
           create: {
             signalId: signal.id,
             currentPrice,
             highestPrice: currentPrice,
             lowestPrice: currentPrice,
+            isNotifiedEntry: newStatus === 'ENTRY_REACHED',
+            isNotifiedTp1: newStatus === 'TP1_HIT',
+            isNotifiedTp2: newStatus === 'TP2_HIT',
+            isNotifiedTp3: newStatus === 'TP3_HIT',
+            isNotifiedSl: newStatus === 'SL_HIT',
           },
         }),
       ]);

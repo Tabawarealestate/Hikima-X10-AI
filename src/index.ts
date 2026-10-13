@@ -113,9 +113,17 @@ async function bootstrap() {
       for (const ev of events) {
         console.log(`[MONITOR] ${ev.symbol} -> ${ev.newStatus}: ${ev.message}`);
         if (botService) {
-          const tgUsers = await prisma.telegramUser.findMany();
-          for (const u of tgUsers) {
-            botService.bot.telegram.sendMessage(String(u.telegramId), ev.message).catch(() => {});
+          // Find users who actually received this specific signal ID
+          const recipientNotifications = await prisma.notification.findMany({
+            where: { title: ev.signalId },
+            include: { user: { include: { telegramUser: true } } },
+          });
+
+          for (const notif of recipientNotifications) {
+            const tgId = notif.user.telegramUser?.telegramId;
+            if (tgId) {
+              botService.bot.telegram.sendMessage(String(tgId), ev.message).catch(() => {});
+            }
           }
         }
       }
@@ -154,21 +162,27 @@ async function bootstrap() {
           pipSize: sym.pipSize,
           dailySignalsSent: 0,
           maxDailyQuota: 5,
+          entryMin: consensus.chosenSetup.entryZone.min,
+          entryMax: consensus.chosenSetup.entryZone.max,
+          stopLoss: consensus.chosenSetup.stopLoss,
+          tp1: consensus.chosenSetup.takeProfitLevels.tp1,
+          tp2: consensus.chosenSetup.takeProfitLevels.tp2,
         });
 
         if (!riskCheck.isApproved) continue;
+
+        // Check persistent PostgreSQL database deduplication (active signal check + 4h symbol cooldown)
+        const isDuplicate = await deduplicationService.isDatabaseDuplicate(sym.id, consensus.finalDirection, 4);
+        if (isDuplicate) {
+          continue;
+        }
 
         const fingerprint = deduplicationService.generateFingerprint({
           symbol: sym.symbol,
           strategyCode: consensus.chosenSetup.strategyName,
           direction: consensus.finalDirection,
           timeframe: 'M15',
-          entryMin: consensus.chosenSetup.entryZone.min,
-          entryMax: consensus.chosenSetup.entryZone.max,
         });
-
-        if (deduplicationService.isDuplicate(fingerprint)) continue;
-        deduplicationService.recordSignal(fingerprint);
 
         // Dynamically resolve matching DB Strategy
         const stratNameUpper = consensus.chosenSetup.strategyName.toUpperCase();
@@ -187,31 +201,37 @@ async function bootstrap() {
 
         if (!dbStrategy) continue;
 
-        const newSignal = await prisma.signal.create({
-          data: {
-            fingerprint,
-            symbolId: sym.id,
-            strategyId: dbStrategy.id,
-            timeframe: 'M15',
-            direction: consensus.finalDirection,
-            confidence: consensus.chosenSetup.confidence,
-            qualityScore: consensus.consensusScore,
-            entryMin: consensus.chosenSetup.entryZone.min,
-            entryMax: consensus.chosenSetup.entryZone.max,
-            stopLoss: consensus.chosenSetup.stopLoss,
-            tp1: consensus.chosenSetup.takeProfitLevels.tp1,
-            tp2: consensus.chosenSetup.takeProfitLevels.tp2,
-            tp3: consensus.chosenSetup.takeProfitLevels.tp3,
-            riskReward: consensus.chosenSetup.riskRewardRatio,
-            reasoning: consensus.chosenSetup.reasoning as any,
-            supporting: consensus.chosenSetup.supportingFactors as any,
-            opposing: consensus.chosenSetup.opposingFactors as any,
-            marketRegime: consensus.chosenSetup.marketRegime,
-            session: 'London/New York',
-            status: 'SENT',
-            sentAt: new Date(),
-          },
-        });
+        let newSignal;
+        try {
+          newSignal = await prisma.signal.create({
+            data: {
+              fingerprint,
+              symbolId: sym.id,
+              strategyId: dbStrategy.id,
+              timeframe: 'M15',
+              direction: consensus.finalDirection,
+              confidence: consensus.chosenSetup.confidence,
+              qualityScore: consensus.consensusScore,
+              entryMin: consensus.chosenSetup.entryZone.min,
+              entryMax: consensus.chosenSetup.entryZone.max,
+              stopLoss: consensus.chosenSetup.stopLoss,
+              tp1: consensus.chosenSetup.takeProfitLevels.tp1,
+              tp2: consensus.chosenSetup.takeProfitLevels.tp2,
+              tp3: consensus.chosenSetup.takeProfitLevels.tp3,
+              riskReward: consensus.chosenSetup.riskRewardRatio,
+              reasoning: consensus.chosenSetup.reasoning as any,
+              supporting: consensus.chosenSetup.supportingFactors as any,
+              opposing: consensus.chosenSetup.opposingFactors as any,
+              marketRegime: consensus.chosenSetup.marketRegime,
+              session: 'London/New York',
+              status: 'SENT',
+              sentAt: new Date(),
+            },
+          });
+        } catch (dbErr) {
+          console.error(`⚠️ Could not save signal for ${sym.symbol}:`, dbErr);
+          continue;
+        }
 
         console.log(`🔥 [SIGNAL GENERATED] ${sym.symbol} ${consensus.finalDirection} (${consensus.consensusScore}/100) Strategy: ${dbStrategy.name}`);
 
@@ -246,18 +266,48 @@ async function bootstrap() {
               continue;
             }
 
-            // 1. Free Users Symbol Limitation (EURUSD or NZDUSD only)
+            // HARD LIMIT: Max 1 Active Signal Per User (User must wait until their current signal is CLOSED)
+            const lastUserNotif = await prisma.notification.findFirst({
+              where: { userId: tu.userId },
+              orderBy: { createdAt: 'desc' },
+            });
+
+            if (lastUserNotif) {
+              const activeUserSignal = await prisma.signal.findUnique({
+                where: { id: lastUserNotif.title },
+              });
+              if (
+                activeUserSignal &&
+                !activeUserSignal.closedAt &&
+                ['SENT', 'ACTIVE', 'ENTRY_REACHED', 'TP1_HIT', 'TP2_HIT', 'SL_MOVED_TO_ENTRY', 'BREAKEVEN'].includes(
+                  activeUserSignal.status
+                )
+              ) {
+                continue; // User currently has an open active signal in progress.
+              }
+            }
+
+            // 1. Free Users Symbol & Welcome Rule (EURUSD / ETHUSD, or 1-time XAUUSD welcome signal)
+            const symClean = sym.symbol.replace('/', '').toUpperCase();
             if (!isPremium) {
-              const symClean = sym.symbol.replace('/', '').toUpperCase();
-              if (!['EURUSD', 'NZDUSD'].includes(symClean)) {
+              const isXauWelcome = !tu.freeWelcomeXauSent && symClean === 'XAUUSD' && dbStrategy.code === 'SMC';
+              const isAllowedFreePair = ['EURUSD', 'ETHUSD'].includes(symClean) && dbStrategy.code === 'SMC';
+
+              if (!isXauWelcome && !isAllowedFreePair) {
                 continue;
               }
             }
 
-            // 2. Custom Market Watchlist Filter
+            // 2. Market Watchlist Filter (Respects custom selections; defaults to top liquid markets if empty)
             if (tu.user.watchlist && tu.user.watchlist.length > 0) {
               const userSelectedSymbolIds = new Set(tu.user.watchlist.map((w) => w.symbolId));
               if (!userSelectedSymbolIds.has(sym.id)) {
+                continue;
+              }
+            } else if (isPremium) {
+              // Default top symbols for Premium users with empty watchlist
+              const defaultPremiumSymbols = ['XAUUSD', 'EURUSD', 'GBPUSD', 'BTCUSD', 'USOIL'];
+              if (!defaultPremiumSymbols.includes(symClean)) {
                 continue;
               }
             }
@@ -270,6 +320,20 @@ async function bootstrap() {
               if (!stratCodeUpper.includes(prefUpper) && !dbStrategy.name.toUpperCase().includes(prefUpper)) {
                 continue;
               }
+            }
+
+            // 4. Preferred Timeframe Filter
+            const prefTimeframes = tu.user.preferences?.selectedTimeframes
+              ? tu.user.preferences.selectedTimeframes.split(',').map((t) => t.trim().toUpperCase())
+              : ['M15', 'H1', 'H4'];
+            if (!prefTimeframes.includes(newSignal.timeframe.toUpperCase())) {
+              continue;
+            }
+
+            // 5. Min Quality Score Threshold Filter
+            const minScore = tu.user.preferences?.minQualityScore || 75;
+            if (newSignal.qualityScore < minScore) {
+              continue;
             }
 
             const quota = isPremium ? 5 : 1;
@@ -287,6 +351,16 @@ async function bootstrap() {
                   data: {
                     dailySignalCount: { increment: 1 },
                     lastSignalDate: now,
+                    freeWelcomeXauSent: !isPremium && symClean === 'XAUUSD' ? true : tu.freeWelcomeXauSent,
+                  },
+                });
+
+                // Record delivery notification linking user ID and signal ID
+                await prisma.notification.create({
+                  data: {
+                    userId: tu.userId,
+                    title: newSignal.id,
+                    body: sym.symbol,
                   },
                 });
               }

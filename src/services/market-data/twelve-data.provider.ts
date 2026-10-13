@@ -31,6 +31,10 @@ export class TwelveDataProvider implements MarketDataProvider {
 
   private formatSymbol(symbol: string): string {
     const clean = symbol.trim().toUpperCase().replace('/', '');
+    const nonSlashSymbols = ['NAS100', 'SPX500', 'GER40', 'US30', 'UK100', 'JP225', 'USOIL', 'BRENT'];
+    if (nonSlashSymbols.includes(clean)) {
+      return clean;
+    }
     if (clean.length === 6) {
       return `${clean.slice(0, 3)}/${clean.slice(3)}`;
     }

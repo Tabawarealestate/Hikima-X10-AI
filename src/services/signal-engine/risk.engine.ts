@@ -13,13 +13,71 @@ export interface RiskCheckInput {
   dailySignalsSent: number;
   maxDailyQuota: number;
   isHighImpactNewsImminent?: boolean;
+  entryMin?: number;
+  entryMax?: number;
+  stopLoss?: number;
+  tp1?: number;
+  tp2?: number;
 }
 
 export class RiskEngine {
   private minQualityThreshold = 75;
   private maxSpreadPips = 5.0;
 
+  validateCandidateSetup(setup: {
+    symbol: string;
+    direction: 'BUY' | 'SELL';
+    entryMin?: number;
+    entryMax?: number;
+    stopLoss?: number;
+    tp1?: number;
+    tp2?: number;
+  }): { isValid: boolean; reason?: string } {
+    // If trade parameters are provided, perform strict parameter & R/R validation
+    if (setup.entryMin === undefined && setup.entryMax === undefined && setup.stopLoss === undefined) {
+      return { isValid: true };
+    }
+
+    if (!setup.entryMin || !setup.entryMax || setup.entryMin <= 0 || setup.entryMax <= 0) {
+      return { isValid: false, reason: 'INVALID_ENTRY_ZONE: Missing or non-positive entry boundaries.' };
+    }
+    if (!setup.stopLoss || setup.stopLoss <= 0) {
+      return { isValid: false, reason: 'INVALID_STOP_LOSS: Missing or non-positive stop loss price.' };
+    }
+    if (!setup.tp1 || !setup.tp2 || setup.tp1 <= 0 || setup.tp2 <= 0) {
+      return { isValid: false, reason: 'INVALID_TAKE_PROFIT: Missing or non-positive take profit levels.' };
+    }
+
+    const avgEntry = (setup.entryMin + setup.entryMax) / 2;
+    const isBuy = setup.direction === 'BUY';
+    const risk = isBuy ? avgEntry - setup.stopLoss : setup.stopLoss - avgEntry;
+    const reward = isBuy ? setup.tp1 - avgEntry : avgEntry - setup.tp1;
+
+    if (risk <= 0) {
+      return { isValid: false, reason: 'INVALID_STOP_LOSS_DIRECTION: Stop loss on wrong side of entry zone.' };
+    }
+    if (reward <= 0) {
+      return { isValid: false, reason: 'INVALID_TAKE_PROFIT_DIRECTION: Take profit on wrong side of entry zone.' };
+    }
+
+    const rrRatio = reward / risk;
+    if (rrRatio < 1.0) {
+      return { isValid: false, reason: `INSUFFICIENT_RISK_REWARD: R/R ratio (${rrRatio.toFixed(2)}) is below minimum required 1:1.0.` };
+    }
+
+    return { isValid: true };
+  }
+
   evaluateRisk(input: RiskCheckInput): RiskCheckResult {
+    // 0. Complete Parameters & R/R Check
+    const paramValidation = this.validateCandidateSetup(input);
+    if (!paramValidation.isValid) {
+      return {
+        isApproved: false,
+        rejectionReason: paramValidation.reason,
+        riskScore: 0,
+      };
+    }
     // 1. Daily Quota Check
     if (input.dailySignalsSent >= input.maxDailyQuota) {
       return {

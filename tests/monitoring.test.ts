@@ -1,6 +1,7 @@
 import { SignalDeduplicationService } from '../src/services/signal-engine/deduplication.service';
 import { SignalMonitoringWorker } from '../src/services/monitoring/signal-monitor.worker';
 import { MarketDataProvider } from '../src/services/market-data/provider.interface';
+import { prisma } from '../src/database';
 
 describe('Signal Deduplication & Lifecycle Monitoring Tests', () => {
   it('should generate deterministic fingerprints and enforce cooldown', () => {
@@ -45,6 +46,8 @@ describe('Signal Deduplication & Lifecycle Monitoring Tests', () => {
         provider: 'Mock',
       }),
     };
+
+    jest.spyOn(prisma.signal, 'findMany').mockResolvedValue([] as any);
 
     const worker = new SignalMonitoringWorker(mockProvider);
     expect(worker).toBeDefined();

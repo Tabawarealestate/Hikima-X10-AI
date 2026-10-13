@@ -91,20 +91,21 @@ model User {
 }
 
 model TelegramUser {
-  id               String      @id @default(uuid())
-  userId           String      @unique
-  user             User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  telegramId       BigInt      @unique
-  username         String?
-  firstName        String?
-  lastName         String?
-  languageCode     String      @default("en")
-  isBot            Boolean     @default(false)
-  chatId           BigInt?
-  dailySignalCount Int         @default(0)
-  lastSignalDate   DateTime?
-  createdAt        DateTime    @default(now())
-  updatedAt        DateTime    @updatedAt
+  id                  String      @id @default(uuid())
+  userId              String      @unique
+  user                User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  telegramId          BigInt      @unique
+  username            String?
+  firstName           String?
+  lastName            String?
+  languageCode        String      @default("en")
+  isBot               Boolean     @default(false)
+  chatId              BigInt?
+  dailySignalCount    Int         @default(0)
+  lastSignalDate      DateTime?
+  freeWelcomeXauSent  Boolean     @default(false)
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
 
   @@map("telegram_users")
 }
@@ -252,7 +253,7 @@ model UserStrategy {
 
 model Signal {
   id             String          @id @default(uuid())
-  fingerprint    String          @unique
+  fingerprint    String
   symbolId       String
   marketSymbol   MarketSymbol    @relation(fields: [symbolId], references: [id])
   strategyId     String
@@ -285,6 +286,8 @@ model Signal {
   levels         SignalLevel[]
   monitoring     SignalMonitoring?
 
+  @@index([symbolId, status, createdAt])
+  @@index([fingerprint])
   @@map("signals")
 }
 
@@ -313,15 +316,20 @@ model SignalLevel {
 }
 
 model SignalMonitoring {
-  id             String   @id @default(uuid())
-  signalId       String   @unique
-  signal         Signal   @relation(fields: [signalId], references: [id], onDelete: Cascade)
-  currentPrice   Float
-  highestPrice   Float
-  lowestPrice    Float
-  isSlMovedBe    Boolean  @default(false)
-  isPartialClosed Boolean @default(false)
-  lastCheckedAt  DateTime @default(now())
+  id              String   @id @default(uuid())
+  signalId        String   @unique
+  signal          Signal   @relation(fields: [signalId], references: [id], onDelete: Cascade)
+  currentPrice    Float
+  highestPrice    Float
+  lowestPrice     Float
+  isSlMovedBe     Boolean  @default(false)
+  isPartialClosed Boolean  @default(false)
+  isNotifiedEntry Boolean  @default(false)
+  isNotifiedTp1   Boolean  @default(false)
+  isNotifiedTp2   Boolean  @default(false)
+  isNotifiedTp3   Boolean  @default(false)
+  isNotifiedSl    Boolean  @default(false)
+  lastCheckedAt   DateTime @default(now())
 
   @@map("signal_monitoring")
 }
@@ -392,6 +400,8 @@ model UserPreference {
   language          String   @default("en")
   timezone          String   @default("UTC")
   preferredStrategy String   @default("AI_CONSENSUS")
+  selectedTimeframes String  @default("M15,H1,H4")
+  minQualityScore   Int      @default(75)
   newsFilterOn      Boolean  @default(true)
   alertNewSignal    Boolean  @default(true)
   alertTp1          Boolean  @default(true)
