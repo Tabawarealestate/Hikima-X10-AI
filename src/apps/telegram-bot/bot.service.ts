@@ -14,6 +14,29 @@ export class TelegramBotService {
   private channelMemberCache = new Map<number, { isMember: boolean; cachedAt: number }>();
   private cacheTtlMs = 5 * 60 * 1000;
 
+  // Track user message IDs to automatically clean up previous menu screens
+  private userLastMessageIds = new Map<number, number[]>();
+
+  private async cleanAndReply(ctx: any, text: string, extra?: any) {
+    const userId = ctx.from?.id;
+    if (userId) {
+      if (ctx.message) {
+        await ctx.deleteMessage().catch(() => {});
+      }
+      const oldIds = this.userLastMessageIds.get(userId) || [];
+      for (const msgId of oldIds) {
+        await ctx.telegram.deleteMessage(ctx.chat.id, msgId).catch(() => {});
+      }
+      this.userLastMessageIds.set(userId, []);
+    }
+
+    const sent = await ctx.reply(text, extra);
+    if (sent && sent.message_id && userId) {
+      this.userLastMessageIds.set(userId, [sent.message_id]);
+    }
+    return sent;
+  }
+
   constructor(token = config.TELEGRAM_BOT_TOKEN) {
     this.bot = new Telegraf(token);
     this.setupErrorHandling();
@@ -635,7 +658,7 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
     const lang = await this.getUserLang(ctx.from.id);
     const symbols = await prisma.marketSymbol.count({ where: { isSupported: true } });
     const text = `⚡ AI SCAN ENGINE STATUS\n\nStatus: 🟢 ACTIVE\nScanning Mode: 24/7 Real-Time\nMonitored Markets: ${symbols} Assets\nScan Interval: Every 60 Seconds\nProvider Health: 🟢 ONLINE (TwelveData, Crypto, Forex)\nLast Scan Cycle: ${new Date().toISOString()}\n\nThe AI scanner analyzes technical structure, liquidity sweeps, and multi-timeframe confluence continuously across global assets.`;
-    await ctx.reply(text, this.getBottomReplyKeyboard(lang));
+    await this.cleanAndReply(ctx, text, this.getBottomReplyKeyboard(lang));
   }
 
   private async renderSignals(ctx: any) {
@@ -647,7 +670,7 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
     });
 
     if (activeSignals.length === 0) {
-      return ctx.reply('📊 ACTIVE SIGNALS:\n\nNo active signals currently open. Continuous market analysis running.', this.getBottomReplyKeyboard(lang));
+      return this.cleanAndReply(ctx, '📊 ACTIVE SIGNALS:\n\nNo active signals currently open. Continuous market analysis running.', this.getBottomReplyKeyboard(lang));
     }
 
     let text = `📊 ACTIVE SIGNALS (${activeSignals.length}):\n\n`;
@@ -655,7 +678,7 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
       const progressBar = this.getProgressBar(s.qualityScore);
       text += `• ${s.marketSymbol.symbol} (${s.direction})\n  Strategy: ${s.strategy.name}\n  Quality: ${s.qualityScore}/100 ${progressBar}\n  Status: ${s.status}\n\n`;
     }
-    await ctx.reply(text, this.getBottomReplyKeyboard(lang));
+    await this.cleanAndReply(ctx, text, this.getBottomReplyKeyboard(lang));
   }
 
   private async renderMarkets(ctx: any) {
@@ -665,7 +688,7 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
       [Markup.button.callback('🥇 Metals', 'cat_METALS'), Markup.button.callback('🛢 Commodities', 'cat_COMMODITIES')],
       [Markup.button.callback('📊 Indices', 'cat_INDICES'), Markup.button.callback('💻 Stocks', 'cat_STOCKS')],
     ]);
-    await ctx.reply(text, keyboard);
+    await this.cleanAndReply(ctx, text, keyboard);
   }
 
   private async renderMarketsByCategory(ctx: any, category: string) {
@@ -717,7 +740,7 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
       [Markup.button.callback('📈 Trend Following', 'select_strat_TREND')],
       [Markup.button.callback('💥 Breakout Engine', 'select_strat_BREAKOUT')],
     ]);
-    await ctx.reply(text, keyboard);
+    await this.cleanAndReply(ctx, text, keyboard);
   }
 
   private async renderSubscription(ctx: any) {
@@ -727,7 +750,7 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
       [Markup.button.callback('Yearly Plan ($500/yr)', 'buy_YEARLY')],
       [Markup.button.callback('Elite Plan ($1,000/yr)', 'buy_ELITE')],
     ]);
-    await ctx.reply(text, keyboard);
+    await this.cleanAndReply(ctx, text, keyboard);
   }
 
   private async renderPerformance(ctx: any) {
@@ -738,12 +761,12 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
     const losses = stats ? stats.totalLosses : 0;
     const winRate = total > 0 ? ((wins / total) * 100).toFixed(1) : 'N/A';
 
-    await ctx.reply(`📊 PLATFORM PERFORMANCE:\n\nTotal Completed Signals: ${total}\nWins: ${wins}\nLosses: ${losses}\nWin Rate: ${winRate}%\n\nPerformance metrics calculated strictly from verified database historical results.`, this.getBottomReplyKeyboard(lang));
+    await this.cleanAndReply(ctx, `📊 PLATFORM PERFORMANCE:\n\nTotal Completed Signals: ${total}\nWins: ${wins}\nLosses: ${losses}\nWin Rate: ${winRate}%\n\nPerformance metrics calculated strictly from verified database historical results.`, this.getBottomReplyKeyboard(lang));
   }
 
   private async renderSettings(ctx: any) {
     const lang = await this.getUserLang(ctx.from.id);
-    await ctx.reply(`⚙️ USER SETTINGS & PROFILE CUSTOMIZATION:\n\n• Current Language: ${lang.toUpperCase()}\n• Timezone: UTC\n• News Filter: ACTIVE (High Impact)\n• Mandatory Channel: Joined @hikimaaipalace\n\nProfile Options:`, Markup.inlineKeyboard([
+    await this.cleanAndReply(ctx, `⚙️ USER SETTINGS & PROFILE CUSTOMIZATION:\n\n• Current Language: ${lang.toUpperCase()}\n• Timezone: UTC\n• News Filter: ACTIVE (High Impact)\n• Mandatory Channel: Joined @hikimaaipalace\n\nProfile Options:`, Markup.inlineKeyboard([
       [Markup.button.callback('🌐 Change Language', 'edit_lang'), Markup.button.callback('🕒 Change Timezone', 'edit_tz')],
       [Markup.button.callback('🔔 Toggle News Filter', 'toggle_news_filter')],
     ]));
@@ -751,7 +774,7 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
 
   private async renderHelp(ctx: any) {
     const lang = await this.getUserLang(ctx.from.id);
-    await ctx.reply(`❓ HELP & SUPPORT:\n\nHikima X10 AI operates 24/7 scanning global markets using real market feeds and deterministic strategy engines.\n\nOfficial Channel: @hikimaaipalace\nOfficial Support Contact: @Hikimawebdev\nDocumentation: https://hikimax10.ai/docs`, this.getBottomReplyKeyboard(lang));
+    await this.cleanAndReply(ctx, `❓ HELP & SUPPORT:\n\nHikima X10 AI operates 24/7 scanning global markets using real market feeds and deterministic strategy engines.\n\nOfficial Channel: @hikimaaipalace\nOfficial Support Contact: @Hikimawebdev\nDocumentation: https://hikimax10.ai/docs`, this.getBottomReplyKeyboard(lang));
   }
 
   private async renderStatus(ctx: any) {
