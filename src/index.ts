@@ -144,6 +144,8 @@ async function bootstrap() {
     isScanning = true;
     try {
       const symbols = await prisma.marketSymbol.findMany({ where: { isSupported: true } });
+      const validCandidates: any[] = [];
+
       for (const sym of symbols) {
         const candles = await marketDataProvider.fetchCandles(sym.symbol, 'M15', 60);
         if (candles.length < 30) continue;
@@ -173,16 +175,7 @@ async function bootstrap() {
 
         // Check persistent PostgreSQL database deduplication (active signal check + 4h symbol cooldown)
         const isDuplicate = await deduplicationService.isDatabaseDuplicate(sym.id, consensus.finalDirection, 4);
-        if (isDuplicate) {
-          continue;
-        }
-
-        const fingerprint = deduplicationService.generateFingerprint({
-          symbol: sym.symbol,
-          strategyCode: consensus.chosenSetup.strategyName,
-          direction: consensus.finalDirection,
-          timeframe: 'M15',
-        });
+        if (isDuplicate) continue;
 
         // Dynamically resolve matching DB Strategy
         const stratNameUpper = consensus.chosenSetup.strategyName.toUpperCase();
@@ -200,6 +193,27 @@ async function bootstrap() {
         }
 
         if (!dbStrategy) continue;
+
+        validCandidates.push({
+          sym,
+          consensus,
+          dbStrategy,
+          score: consensus.consensusScore,
+        });
+      }
+
+      // SELECT ONLY THE TOP #1 HIGHEST QUALITY CANDIDATE IN THE MARKET
+      if (validCandidates.length > 0) {
+        validCandidates.sort((a, b) => b.score - a.score);
+        const top = validCandidates[0];
+        const { sym, consensus, dbStrategy } = top;
+
+        const fingerprint = deduplicationService.generateFingerprint({
+          symbol: sym.symbol,
+          strategyCode: consensus.chosenSetup.strategyName,
+          direction: consensus.finalDirection,
+          timeframe: 'M15',
+        });
 
         let newSignal;
         try {
@@ -230,139 +244,138 @@ async function bootstrap() {
           });
         } catch (dbErr) {
           console.error(`⚠️ Could not save signal for ${sym.symbol}:`, dbErr);
-          continue;
         }
 
-        console.log(`🔥 [SIGNAL GENERATED] ${sym.symbol} ${consensus.finalDirection} (${consensus.consensusScore}/100) Strategy: ${dbStrategy.name}`);
+        if (newSignal) {
+          console.log(`🔥 [SINGLE TOP SIGNAL GENERATED] ${sym.symbol} ${consensus.finalDirection} (${consensus.consensusScore}/100) Strategy: ${dbStrategy.name}`);
 
-        // Dispatch Signal to Active Telegram Users
-        if (botService) {
-          const activeUsers = await prisma.telegramUser.findMany({
-            include: { user: { include: { watchlist: true, preferences: true } } },
-          });
-
-          const now = new Date();
-
-          for (const tu of activeUsers) {
-            let currentDailyCount = tu.dailySignalCount;
-
-            // Reset daily count if last signal was from a previous UTC calendar day
-            if (tu.lastSignalDate) {
-              const lastDateStr = new Date(tu.lastSignalDate).toISOString().split('T')[0];
-              const nowDateStr = now.toISOString().split('T')[0];
-              if (lastDateStr !== nowDateStr) {
-                currentDailyCount = 0;
-                await prisma.telegramUser.update({
-                  where: { id: tu.id },
-                  data: { dailySignalCount: 0 },
-                });
-              }
-            }
-
-            const isPremium = tu.user.accessType === 'PREMIUM';
-            const trialExpired = tu.user.accessType === 'FREE' && tu.user.trialEndDate && now > new Date(tu.user.trialEndDate);
-
-            if (trialExpired) {
-              continue;
-            }
-
-            // HARD LIMIT: Max 1 Active Signal Per User (User must wait until their current signal is CLOSED)
-            const lastUserNotif = await prisma.notification.findFirst({
-              where: { userId: tu.userId },
-              orderBy: { createdAt: 'desc' },
+          // Dispatch Single Signal to Eligible Active Telegram Users
+          if (botService) {
+            const activeUsers = await prisma.telegramUser.findMany({
+              include: { user: { include: { watchlist: true, preferences: true } } },
             });
 
-            if (lastUserNotif) {
-              const activeUserSignal = await prisma.signal.findUnique({
-                where: { id: lastUserNotif.title },
-              });
-              if (
-                activeUserSignal &&
-                !activeUserSignal.closedAt &&
-                ['SENT', 'ACTIVE', 'ENTRY_REACHED', 'TP1_HIT', 'TP2_HIT', 'SL_MOVED_TO_ENTRY', 'BREAKEVEN'].includes(
-                  activeUserSignal.status
-                )
-              ) {
-                continue; // User currently has an open active signal in progress.
+            const now = new Date();
+
+            for (const tu of activeUsers) {
+              let currentDailyCount = tu.dailySignalCount;
+
+              // Reset daily count if last signal was from a previous UTC calendar day
+              if (tu.lastSignalDate) {
+                const lastDateStr = new Date(tu.lastSignalDate).toISOString().split('T')[0];
+                const nowDateStr = now.toISOString().split('T')[0];
+                if (lastDateStr !== nowDateStr) {
+                  currentDailyCount = 0;
+                  await prisma.telegramUser.update({
+                    where: { id: tu.id },
+                    data: { dailySignalCount: 0 },
+                  });
+                }
               }
-            }
 
-            // 1. Free Users Symbol & Welcome Rule (EURUSD / ETHUSD, or 1-time XAUUSD welcome signal)
-            const symClean = sym.symbol.replace('/', '').toUpperCase();
-            if (!isPremium) {
-              const isXauWelcome = !tu.freeWelcomeXauSent && symClean === 'XAUUSD' && dbStrategy.code === 'SMC';
-              const isAllowedFreePair = ['EURUSD', 'ETHUSD'].includes(symClean) && dbStrategy.code === 'SMC';
+              const isPremium = tu.user.accessType === 'PREMIUM';
+              const trialExpired = tu.user.accessType === 'FREE' && tu.user.trialEndDate && now > new Date(tu.user.trialEndDate);
 
-              if (!isXauWelcome && !isAllowedFreePair) {
-                continue;
-              }
-            }
+              if (trialExpired) continue;
 
-            // 2. Market Watchlist Filter (Respects custom selections; defaults to top liquid markets if empty)
-            if (tu.user.watchlist && tu.user.watchlist.length > 0) {
-              const userSelectedSymbolIds = new Set(tu.user.watchlist.map((w) => w.symbolId));
-              if (!userSelectedSymbolIds.has(sym.id)) {
-                continue;
-              }
-            } else if (isPremium) {
-              // Default top symbols for Premium users with empty watchlist
-              const defaultPremiumSymbols = ['XAUUSD', 'EURUSD', 'GBPUSD', 'BTCUSD', 'USOIL'];
-              if (!defaultPremiumSymbols.includes(symClean)) {
-                continue;
-              }
-            }
-
-            // 3. User Selected Strategy Preference Filter
-            const prefStrategy = tu.user.preferences?.preferredStrategy;
-            if (prefStrategy && prefStrategy !== 'AI_CONSENSUS' && prefStrategy !== 'ALL') {
-              const stratCodeUpper = dbStrategy.code.toUpperCase();
-              const prefUpper = prefStrategy.toUpperCase();
-              if (!stratCodeUpper.includes(prefUpper) && !dbStrategy.name.toUpperCase().includes(prefUpper)) {
-                continue;
-              }
-            }
-
-            // 4. Preferred Timeframe Filter
-            const prefTimeframes = tu.user.preferences?.selectedTimeframes
-              ? tu.user.preferences.selectedTimeframes.split(',').map((t) => t.trim().toUpperCase())
-              : ['M15', 'H1', 'H4'];
-            if (!prefTimeframes.includes(newSignal.timeframe.toUpperCase())) {
-              continue;
-            }
-
-            // 5. Min Quality Score Threshold Filter
-            const minScore = tu.user.preferences?.minQualityScore || 75;
-            if (newSignal.qualityScore < minScore) {
-              continue;
-            }
-
-            const quota = isPremium ? 5 : 1;
-
-            if (currentDailyCount < quota) {
-              const sent = await botService.sendFormattedSignal(String(tu.telegramId), {
-                ...newSignal,
-                marketSymbol: sym,
-                strategyName: dbStrategy.name,
+              // HARD LIMIT: Max 1 Active Signal Per User (User must wait until current signal is CLOSED)
+              const lastUserNotif = await prisma.notification.findFirst({
+                where: { userId: tu.userId },
+                orderBy: { createdAt: 'desc' },
               });
 
-              if (sent) {
-                await prisma.telegramUser.update({
-                  where: { id: tu.id },
-                  data: {
-                    dailySignalCount: { increment: 1 },
-                    lastSignalDate: now,
-                    freeWelcomeXauSent: !isPremium && symClean === 'XAUUSD' ? true : tu.freeWelcomeXauSent,
-                  },
+              if (lastUserNotif) {
+                const activeUserSignal = await prisma.signal.findUnique({
+                  where: { id: lastUserNotif.title },
+                });
+                if (
+                  activeUserSignal &&
+                  !activeUserSignal.closedAt &&
+                  ['SENT', 'ACTIVE', 'ENTRY_REACHED', 'TP1_HIT', 'TP2_HIT', 'SL_MOVED_TO_ENTRY', 'BREAKEVEN'].includes(
+                    activeUserSignal.status
+                  )
+                ) {
+                  continue; // User currently has an open active signal in progress.
+                }
+              }
+
+              // 1. Free Users Symbol & Welcome Rule (EURUSD / ETHUSD, or 1-time XAUUSD welcome signal)
+              const symClean = sym.symbol.replace('/', '').toUpperCase();
+              if (!isPremium) {
+                const isXauWelcome = !tu.freeWelcomeXauSent && symClean === 'XAUUSD' && dbStrategy.code === 'SMC';
+                const isAllowedFreePair = ['EURUSD', 'ETHUSD'].includes(symClean) && dbStrategy.code === 'SMC';
+
+                if (!isXauWelcome && !isAllowedFreePair) {
+                  continue;
+                }
+              }
+
+              // 2. Market Watchlist Filter (Respects custom selections; defaults to top liquid markets if empty)
+              if (tu.user.watchlist && tu.user.watchlist.length > 0) {
+                const userSelectedSymbolIds = new Set(tu.user.watchlist.map((w) => w.symbolId));
+                if (!userSelectedSymbolIds.has(sym.id)) {
+                  continue;
+                }
+              } else if (isPremium) {
+                // Default top symbols for Premium users with empty watchlist
+                const defaultPremiumSymbols = ['XAUUSD', 'EURUSD', 'GBPUSD', 'BTCUSD', 'USOIL'];
+                if (!defaultPremiumSymbols.includes(symClean)) {
+                  continue;
+                }
+              }
+
+              // 3. User Selected Strategy Preference Filter
+              const prefStrategy = tu.user.preferences?.preferredStrategy;
+              if (prefStrategy && prefStrategy !== 'AI_CONSENSUS' && prefStrategy !== 'ALL') {
+                const stratCodeUpper = dbStrategy.code.toUpperCase();
+                const prefUpper = prefStrategy.toUpperCase();
+                if (!stratCodeUpper.includes(prefUpper) && !dbStrategy.name.toUpperCase().includes(prefUpper)) {
+                  continue;
+                }
+              }
+
+              // 4. Preferred Timeframe Filter
+              const prefTimeframes = tu.user.preferences?.selectedTimeframes
+                ? tu.user.preferences.selectedTimeframes.split(',').map((t) => t.trim().toUpperCase())
+                : ['M15', 'H1', 'H4'];
+              if (!prefTimeframes.includes(newSignal.timeframe.toUpperCase())) {
+                continue;
+              }
+
+              // 5. Min Quality Score Threshold Filter
+              const minScore = tu.user.preferences?.minQualityScore || 75;
+              if (newSignal.qualityScore < minScore) {
+                continue;
+              }
+
+              const quota = isPremium ? 5 : 1;
+
+              if (currentDailyCount < quota) {
+                const sent = await botService.sendFormattedSignal(String(tu.telegramId), {
+                  ...newSignal,
+                  marketSymbol: sym,
+                  strategyName: dbStrategy.name,
                 });
 
-                // Record delivery notification linking user ID and signal ID
-                await prisma.notification.create({
-                  data: {
-                    userId: tu.userId,
-                    title: newSignal.id,
-                    body: sym.symbol,
-                  },
-                });
+                if (sent) {
+                  await prisma.telegramUser.update({
+                    where: { id: tu.id },
+                    data: {
+                      dailySignalCount: { increment: 1 },
+                      lastSignalDate: now,
+                      freeWelcomeXauSent: !isPremium && symClean === 'XAUUSD' ? true : tu.freeWelcomeXauSent,
+                    },
+                  });
+
+                  // Record delivery notification linking user ID and signal ID
+                  await prisma.notification.create({
+                    data: {
+                      userId: tu.userId,
+                      title: newSignal.id,
+                      body: sym.symbol,
+                    },
+                  });
+                }
               }
             }
           }
