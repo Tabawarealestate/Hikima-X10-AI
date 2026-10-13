@@ -948,7 +948,8 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
     const total = stats ? stats.totalSignals : 0;
     const wins = stats ? stats.totalWins : 0;
     const losses = stats ? stats.totalLosses : 0;
-    const winRate = total > 0 ? ((wins / total) * 100).toFixed(1) : 'N/A';
+    const closedCount = wins + losses;
+    const winRate = closedCount > 0 ? ((wins / closedCount) * 100).toFixed(1) : 'N/A';
 
     await this.cleanAndReply(ctx, `📊 PLATFORM PERFORMANCE:\n\nTotal Completed Signals: ${total}\nWins: ${wins}\nLosses: ${losses}\nWin Rate: ${winRate}%\n\nPerformance metrics calculated strictly from verified database historical results.`, this.getBottomReplyKeyboard(lang));
   }
