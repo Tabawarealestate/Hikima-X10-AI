@@ -1,4 +1,4 @@
-export type SupportedLanguage = 'en' | 'fr' | 'es' | 'ar';
+export type SupportedLanguage = 'en' | 'fr' | 'es' | 'ar' | 'hi' | 'ur' | 'ha';
 
 export const i18n = {
   en: {
@@ -53,10 +53,50 @@ export const i18n = {
     help: '❓ المساعدة',
     language_updated: '🌐 تم تغيير اللغة إلى العربية بنجاح.',
   },
+  hi: {
+    welcome: (username: string, accessLabel: string) =>
+      `नमस्ते ${username} 👋\n\nआप Hikima X10 AI से जुड़ चुके हैं।\n\n🟢 AI स्कैन इंजन: सक्रिय\n📡 मॉनिटर किए गए बाज़ार: 22 संपत्तियां\n⚡ रीयल-टाइम मल्टी-रणनीति सिग्नल\n🛡 स्वचालित सिग्नल मॉनिटरिंग\n\nपहुंच: ${accessLabel}\n\nत्वरित नेविगेट करने के लिए नीचे दिए गए बटन का उपयोग करें!`,
+    signals: '📊 सिग्नल',
+    markets: '📈 बाज़ार',
+    strategies: '🧠 रणनीतियाँ',
+    premium: '💎 प्रीमियम',
+    scan_status: '⚡ स्कैन स्थिति',
+    performance: '📊 प्रदर्शन',
+    settings: '⚙️ सेटिंग्स',
+    help: '❓ सहायता',
+    language_updated: '🌐 भाषा बदलकर हिंदी कर दी गई है।',
+  },
+  ur: {
+    welcome: (username: string, accessLabel: string) =>
+      `خوش آمدید ${username} 👋\n\nآپ Hikima X10 AI سے منسلک ہیں۔\n\n🟢 AI اسکین انجن: فعال\n📡 مانیٹر شدہ مارکیٹس: 22 اثاثے\n⚡ ریئل ٹائم ملٹی حکمت عملی سگنلز\n🛡 خودکار سگنل نگرانی\n\nرسائی: ${accessLabel}\n\nفوری نيویگیٹ کرنے کے لیے نیچے دیے گئے بٹنز کا استعمال کریں!`,
+    signals: '📊 سگنلز',
+    markets: '📈 مارکیٹس',
+    strategies: '🧠 حکمت عملیاں',
+    premium: '💎 پریمیم',
+    scan_status: '⚡ اسکین کی صورتحال',
+    performance: '📊 کارکردگی',
+    settings: '⚙️ سیٹنگز',
+    help: '❓ مدد',
+    language_updated: '🌐 زبان تبدیل کر کے اردو کر دی گئی ہے۔',
+  },
+  ha: {
+    welcome: (username: string, accessLabel: string) =>
+      `Barka da zuwa ${username} 👋\n\nKuna haɗe da Hikima X10 AI.\n\n🟢 INJIN SCAN AI: YANA AIKI\n📡 Kasuwanni da ake bibiya: Kasuwanni 22\n⚡ Sakonnin AI Masu inganci\n🛡 Sa ido na atomatik\n\nSamun Dama: ${accessLabel}\n\nYi amfani da maballan da ke ƙasa don zaɓa cikin sauri!`,
+    signals: '📊 Sakonni',
+    markets: '📈 Kasuwanni',
+    strategies: '🧠 Dabaru',
+    premium: '💎 Babban Buga (Premium)',
+    scan_status: '⚡ Yanayin Scan',
+    performance: '📊 Ayyuka',
+    settings: '⚙️ Tsare-tsare',
+    help: '❓ Taimako',
+    language_updated: '🌐 An canza harshe zuwa Hausa.',
+  },
 };
 
 export function getText(lang: string = 'en', key: keyof typeof i18n['en'], ...args: any[]): any {
-  const selectedLang = (['en', 'fr', 'es', 'ar'].includes(lang) ? lang : 'en') as SupportedLanguage;
+  const supported = ['en', 'fr', 'es', 'ar', 'hi', 'ur', 'ha'];
+  const selectedLang = (supported.includes(lang) ? lang : 'en') as SupportedLanguage;
   const val = i18n[selectedLang][key] || i18n['en'][key];
   if (typeof val === 'function') {
     return (val as Function)(...args);

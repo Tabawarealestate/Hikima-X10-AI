@@ -160,16 +160,18 @@ export class TelegramBotService {
       }
     });
 
-    // 2. Language Change Actions
+    // 2. Language Change Actions (EN, FR, ES, AR, HI, UR, HA)
     this.bot.action('edit_lang', async (ctx) => {
       await ctx.answerCbQuery('Language Selector');
-      await ctx.reply('🌐 Select Preferred Language / Choisissez la langue / Seleccionar idioma / اختر اللغة:', Markup.inlineKeyboard([
+      await this.cleanAndReply(ctx, '🌐 Select Preferred Language / Choisissez la langue / Seleccionar idioma / اختر اللغة / भाषा चुनें / زبان منتخب کریں / Zabi Harshe:', Markup.inlineKeyboard([
         [Markup.button.callback('🇬🇧 English', 'set_lang_en'), Markup.button.callback('🇫🇷 Français', 'set_lang_fr')],
         [Markup.button.callback('🇪🇸 Español', 'set_lang_es'), Markup.button.callback('🇸🇦 العربية', 'set_lang_ar')],
+        [Markup.button.callback('🇮🇳 हिंदी (Hindi)', 'set_lang_hi'), Markup.button.callback('🇵🇰 اردو (Urdu)', 'set_lang_ur')],
+        [Markup.button.callback('🇳🇬 Hausa', 'set_lang_ha')],
       ]));
     });
 
-    this.bot.action(/^set_lang_(en|fr|es|ar)$/, async (ctx) => {
+    this.bot.action(/^set_lang_(en|fr|es|ar|hi|ur|ha)$/, async (ctx) => {
       const selectedLang = ctx.match[1];
       const tgUser = ctx.from;
 
@@ -187,7 +189,57 @@ export class TelegramBotService {
 
       await ctx.answerCbQuery(`Language set to ${selectedLang.toUpperCase()}`);
       const confirmationMsg = getText(selectedLang, 'language_updated');
-      await ctx.reply(confirmationMsg, this.getBottomReplyKeyboard(selectedLang));
+      await this.cleanAndReply(ctx, confirmationMsg, this.getBottomReplyKeyboard(selectedLang));
+    });
+
+    // 2b. Timezone & News Filter Actions
+    this.bot.action('edit_tz', async (ctx) => {
+      await ctx.answerCbQuery('Timezone Selector');
+      await this.cleanAndReply(ctx, '🕒 Select Your Display Timezone:', Markup.inlineKeyboard([
+        [Markup.button.callback('🌐 UTC (+00:00)', 'set_tz_UTC'), Markup.button.callback('🇮🇳 / 🇵🇰 IST (+05:30)', 'set_tz_IST')],
+        [Markup.button.callback('🇳🇬 WAT (+01:00)', 'set_tz_WAT'), Markup.button.callback('🇺🇸 EST (-05:00)', 'set_tz_EST')],
+      ]));
+    });
+
+    this.bot.action(/^set_tz_(UTC|IST|WAT|EST)$/, async (ctx) => {
+      const selectedTz = ctx.match[1];
+      const tgUser = ctx.from;
+
+      const dbUser = await prisma.telegramUser.findUnique({
+        where: { telegramId: BigInt(tgUser.id) },
+        include: { user: { include: { preferences: true } } },
+      });
+
+      if (dbUser?.user.preferences) {
+        await prisma.userPreference.update({
+          where: { id: dbUser.user.preferences.id },
+          data: { timezone: selectedTz },
+        });
+      }
+
+      await ctx.answerCbQuery(`Timezone set to ${selectedTz}`);
+      await this.cleanAndReply(ctx, `🕒 Display Timezone updated to: ${selectedTz}. All signals will align with your timezone.`);
+    });
+
+    this.bot.action('toggle_news_filter', async (ctx) => {
+      const tgUser = ctx.from;
+      const dbUser = await prisma.telegramUser.findUnique({
+        where: { telegramId: BigInt(tgUser.id) },
+        include: { user: { include: { preferences: true } } },
+      });
+
+      let currentVal = true;
+      if (dbUser?.user.preferences) {
+        currentVal = !dbUser.user.preferences.newsFilterOn;
+        await prisma.userPreference.update({
+          where: { id: dbUser.user.preferences.id },
+          data: { newsFilterOn: currentVal },
+        });
+      }
+
+      const statusText = currentVal ? '🟢 ACTIVE (High-Impact Events Filtered)' : '🔴 INACTIVE (All Market Events Processed)';
+      await ctx.answerCbQuery(`News Filter: ${currentVal ? 'ON' : 'OFF'}`);
+      await this.cleanAndReply(ctx, `🔔 High-Impact News Filter updated: ${statusText}`);
     });
 
     // 3. Channel Verification Action
@@ -550,6 +602,24 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
       this.bot.telegram.sendMessage(
         this.channelUsername,
         `🎉 WELCOME NEW TRADER!\n\n${username} has joined Hikima X10 AI!\n\n24/7 Multi-Market Intelligence & Multi-Strategy Analysis Platform.\n\nConnect to the AI bot: @HikimaAIbot`
+      ).catch(() => {});
+    } catch {}
+  }
+
+  public broadcastVolatilityAlertToChannel(symbol: string, regime: string, atr: number) {
+    try {
+      this.bot.telegram.sendMessage(
+        this.channelUsername,
+        `⚡ MARKET VOLATILITY & REGIME SHIFT ⚡\n\nAsset: ${symbol}\nMarket Regime: ${regime}\nATR Volatility Index: ${atr.toFixed(4)}\n\nAI Scan Engine detected volatility expansion. Risk Engine position filters active.\n\nConnect to AI Bot: @HikimaAIbot`
+      ).catch(() => {});
+    } catch {}
+  }
+
+  public broadcastMarketSummaryToChannel(activeSignalCount: number, topMarket: string) {
+    try {
+      this.bot.telegram.sendMessage(
+        this.channelUsername,
+        `📈 DAILY MARKET ANALYSIS SUMMARY 📈\n\nMonitored Active Signals: ${activeSignalCount}\nTop Multi-Timeframe Asset: ${topMarket}\nAI Scan Status: 🟢 24/7 ACTIVE\n\nConnect to AI Bot: @HikimaAIbot`
       ).catch(() => {});
     } catch {}
   }
