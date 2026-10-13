@@ -20,7 +20,7 @@ export class TelegramBotService {
   private async cleanAndReply(ctx: any, text: string, extra?: any) {
     const userId = ctx.from?.id;
     if (userId) {
-      if (ctx.message) {
+      if (ctx.message || ctx.callbackQuery?.message) {
         await ctx.deleteMessage().catch(() => {});
       }
       const oldIds = this.userLastMessageIds.get(userId) || [];
@@ -459,6 +459,12 @@ Click the button below to complete your payment via CryptoMus:`;
       });
 
       if (dbUser) {
+        await prisma.userPreference.upsert({
+          where: { userId: dbUser.userId },
+          update: { preferredStrategy: stratCode },
+          create: { userId: dbUser.userId, preferredStrategy: stratCode },
+        });
+
         const strat = await prisma.strategy.findFirst({ where: { code: stratCode } });
         if (strat) {
           await prisma.userStrategy.upsert({
@@ -470,7 +476,7 @@ Click the button below to complete your payment via CryptoMus:`;
       }
 
       await ctx.answerCbQuery(`Selected Strategy: ${stratCode}`);
-      await ctx.reply(`✅ Preferred Strategy updated to: ${stratCode}. Saved to your profile.`);
+      await this.cleanAndReply(ctx, `✅ Preferred Strategy updated to: ${stratCode}. Saved to your profile. AI scanner will only generate signals matching ${stratCode} for your account.`);
     });
 
     // 11. Admin Commands

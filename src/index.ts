@@ -218,7 +218,7 @@ async function bootstrap() {
         // Dispatch Signal to Active Telegram Users
         if (botService) {
           const activeUsers = await prisma.telegramUser.findMany({
-            include: { user: { include: { watchlist: true } } },
+            include: { user: { include: { watchlist: true, preferences: true } } },
           });
 
           const now = new Date();
@@ -246,10 +246,28 @@ async function bootstrap() {
               continue;
             }
 
-            // Custom Market Watchlist Filter for Premium users
-            if (isPremium && tu.user.watchlist && tu.user.watchlist.length > 0) {
+            // 1. Free Users Symbol Limitation (EURUSD or NZDUSD only)
+            if (!isPremium) {
+              const symClean = sym.symbol.replace('/', '').toUpperCase();
+              if (!['EURUSD', 'NZDUSD'].includes(symClean)) {
+                continue;
+              }
+            }
+
+            // 2. Custom Market Watchlist Filter
+            if (tu.user.watchlist && tu.user.watchlist.length > 0) {
               const userSelectedSymbolIds = new Set(tu.user.watchlist.map((w) => w.symbolId));
               if (!userSelectedSymbolIds.has(sym.id)) {
+                continue;
+              }
+            }
+
+            // 3. User Selected Strategy Preference Filter
+            const prefStrategy = tu.user.preferences?.preferredStrategy;
+            if (prefStrategy && prefStrategy !== 'AI_CONSENSUS' && prefStrategy !== 'ALL') {
+              const stratCodeUpper = dbStrategy.code.toUpperCase();
+              const prefUpper = prefStrategy.toUpperCase();
+              if (!stratCodeUpper.includes(prefUpper) && !dbStrategy.name.toUpperCase().includes(prefUpper)) {
                 continue;
               }
             }
