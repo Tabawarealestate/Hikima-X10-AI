@@ -12,8 +12,11 @@ export interface FingerprintParams {
 
 export class SignalDeduplicationService {
   generateFingerprint(params: FingerprintParams & { timestamp?: Date }): string {
-    const timeKey = params.timestamp ? new Date(params.timestamp).toISOString() : new Date().toISOString().slice(0, 13);
-    const rawKey = `${params.symbol.toUpperCase()}:${params.strategyCode.toUpperCase()}:${params.direction.toUpperCase()}:${params.timeframe}:${timeKey}`;
+    const timeKey = params.timestamp
+      ? new Date(params.timestamp).toISOString().slice(0, 16)
+      : new Date().toISOString().slice(0, 16);
+    const entryKey = `${params.entryMin || 0}:${params.entryMax || 0}`;
+    const rawKey = `${params.symbol.toUpperCase()}:${params.strategyCode.toUpperCase()}:${params.direction.toUpperCase()}:${params.timeframe}:${timeKey}:${entryKey}`;
     return crypto.createHash('sha256').update(rawKey).digest('hex');
   }
 

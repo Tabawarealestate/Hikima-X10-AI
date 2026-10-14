@@ -130,6 +130,8 @@ export class SignalMonitoringWorker {
       }
 
       const isTerminal = ['TP3_HIT', 'SL_HIT', 'EXPIRED', 'INVALIDATED'].includes(newStatus);
+      const isWin = ['TP1_HIT', 'TP2_HIT', 'TP3_HIT'].includes(newStatus);
+      const isLoss = newStatus === 'SL_HIT';
 
       await prisma.$transaction([
         prisma.signal.update({
@@ -137,13 +139,7 @@ export class SignalMonitoringWorker {
           data: {
             status: newStatus,
             closedAt: isTerminal ? new Date() : undefined,
-            result: ['TP1_HIT', 'TP2_HIT', 'TP3_HIT'].includes(newStatus)
-              ? 'WIN'
-              : newStatus === 'SL_HIT'
-              ? 'LOSS'
-              : newStatus === 'EXPIRED'
-              ? 'EXPIRED'
-              : undefined,
+            result: isWin ? 'WIN' : isLoss ? 'LOSS' : newStatus === 'EXPIRED' ? 'EXPIRED' : undefined,
           },
         }),
         prisma.signalEvent.create({
@@ -178,6 +174,32 @@ export class SignalMonitoringWorker {
           },
         }),
       ]);
+
+      if (isTerminal && (isWin || isLoss)) {
+        try {
+          const stats = await prisma.signalStatistic.findFirst();
+          if (stats) {
+            await prisma.signalStatistic.update({
+              where: { id: stats.id },
+              data: {
+                totalSignals: { increment: 1 },
+                totalWins: isWin ? { increment: 1 } : undefined,
+                totalLosses: isLoss ? { increment: 1 } : undefined,
+                updatedAt: new Date(),
+              },
+            });
+          } else {
+            await prisma.signalStatistic.create({
+              data: {
+                period: 'ALL_TIME',
+                totalSignals: 1,
+                totalWins: isWin ? 1 : 0,
+                totalLosses: isLoss ? 1 : 0,
+              },
+            });
+          }
+        } catch {}
+      }
 
       return {
         signalId: signal.id,

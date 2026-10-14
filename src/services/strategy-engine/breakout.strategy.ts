@@ -5,6 +5,63 @@ export class BreakoutStrategy implements StrategyEngine {
   name = 'Breakout Engine';
   requiresPremium = false;
 
+  /**
+   * Generates a 30-minute High Impact News Straddle Breakout setup (BUY STOP / SELL STOP straddle)
+   */
+  public generateNewsStraddle(
+    symbol: string,
+    timeframe: string,
+    candles: Candle[],
+    newsTitle: string,
+    pipSize = 0.0001
+  ): StrategyResult {
+    const timestamp = new Date();
+    const last30 = candles.slice(-30);
+    const high30 = Math.max(...last30.map((c) => c.high));
+    const low30 = Math.min(...last30.map((c) => c.low));
+
+    // Calculate Buy Stop (+12 pips above high) & Sell Stop (-12 pips below low)
+    const pipOffset = pipSize * 12;
+    const buyStopEntry = high30 + pipOffset;
+    const sellStopEntry = low30 - pipOffset;
+
+    const slPips = pipSize * 25; // 25 pips SL
+    const tpPips = pipSize * 50; // 50 pips TP (2x risk)
+
+    return {
+      strategyName: `${this.name} (High-Impact News Straddle)`,
+      symbol,
+      timeframe,
+      direction: 'BUY', // Straddle signal direction default
+      confidence: 90,
+      entryZone: {
+        min: parseFloat(sellStopEntry.toFixed(5)),
+        max: parseFloat(buyStopEntry.toFixed(5)),
+      },
+      stopLoss: parseFloat((buyStopEntry - slPips).toFixed(5)),
+      takeProfitLevels: {
+        tp1: parseFloat((buyStopEntry + tpPips * 0.5).toFixed(5)),
+        tp2: parseFloat((buyStopEntry + tpPips).toFixed(5)),
+        tp3: parseFloat((buyStopEntry + tpPips * 1.5).toFixed(5)),
+      },
+      riskRewardRatio: '1:2.0',
+      reasoning: [
+        `High-impact economic news imminent: ${newsTitle}`,
+        `30-minute consolidation range identified: High ${high30.toFixed(5)} / Low ${low30.toFixed(5)}`,
+        `Pending Straddle Orders: BUY STOP above ${buyStopEntry.toFixed(5)} (+12 pips), SELL STOP below ${sellStopEntry.toFixed(5)} (-12 pips)`,
+        `Automatic SL set at 25 pips, TP set at 50 pips (1:2 R/R ratio)`,
+      ],
+      supportingFactors: [
+        'High Impact News volatility expansion expected',
+        'Pre-news ranging consolidation identified',
+        'Dual pending stop orders ride news spike momentum',
+      ],
+      opposingFactors: ['High spread expansion during release'],
+      marketRegime: 'HIGH_VOLATILITY',
+      timestamp,
+    };
+  }
+
   async analyze(symbol: string, timeframe: string, candles: Candle[]): Promise<StrategyResult> {
     const timestamp = new Date();
     if (candles.length < 30) {

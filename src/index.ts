@@ -1,8 +1,10 @@
 import { app } from './apps/api/app';
 import { TelegramBotService } from './apps/telegram-bot/bot.service';
 import { CompositeMarketDataProvider } from './services/market-data';
+import { EconomicNewsService } from './services/market-data/news.service';
 import { SignalMonitoringWorker } from './services/monitoring/signal-monitor.worker';
 import { EnsembleEngine } from './services/strategy-engine/ensemble.engine';
+import { BreakoutStrategy } from './services/strategy-engine/breakout.strategy';
 import { RiskEngine } from './services/signal-engine/risk.engine';
 import { SignalDeduplicationService } from './services/signal-engine/deduplication.service';
 import { config } from './config';
@@ -68,8 +70,10 @@ async function bootstrap() {
 
   // 2. Initialize Core Services
   const marketDataProvider = new CompositeMarketDataProvider();
+  const newsService = new EconomicNewsService();
   const monitoringWorker = new SignalMonitoringWorker(marketDataProvider);
   const ensembleEngine = new EnsembleEngine();
+  const breakoutStrategy = new BreakoutStrategy();
   const riskEngine = new RiskEngine();
   const deduplicationService = new SignalDeduplicationService();
 
@@ -224,59 +228,86 @@ async function bootstrap() {
         });
       }
 
-      // SELECT ONLY THE TOP #1 HIGHEST QUALITY CANDIDATE IN THE MARKET
+      // 1. Fetch High-Impact News Events for Straddle evaluation
+      let upcomingNews: any[] = [];
+      try {
+        upcomingNews = await newsService.fetchHighImpactNews();
+      } catch {}
+
+      // PROCESS CANDIDATES AND MATCH WITH ELIGIBLE USERS
       if (validCandidates.length > 0) {
         validCandidates.sort((a, b) => b.score - a.score);
-        const top = validCandidates[0];
-        const { sym, consensus, dbStrategy } = top;
 
-        const fingerprint = deduplicationService.generateFingerprint({
-          symbol: sym.symbol,
-          strategyCode: consensus.chosenSetup.strategyName,
-          direction: consensus.finalDirection,
-          timeframe: 'M15',
+        const activeUsers = await prisma.telegramUser.findMany({
+          include: { user: { include: { watchlist: true, preferences: true } } },
         });
 
-        let newSignal;
-        try {
-          newSignal = await prisma.signal.create({
-            data: {
-              fingerprint,
-              symbolId: sym.id,
-              strategyId: dbStrategy.id,
-              timeframe: 'M15',
-              direction: consensus.finalDirection,
-              confidence: consensus.chosenSetup.confidence,
-              qualityScore: consensus.consensusScore,
-              entryMin: consensus.chosenSetup.entryZone.min,
-              entryMax: consensus.chosenSetup.entryZone.max,
-              stopLoss: consensus.chosenSetup.stopLoss,
-              tp1: consensus.chosenSetup.takeProfitLevels.tp1,
-              tp2: consensus.chosenSetup.takeProfitLevels.tp2,
-              tp3: consensus.chosenSetup.takeProfitLevels.tp3,
-              riskReward: consensus.chosenSetup.riskRewardRatio,
-              reasoning: consensus.chosenSetup.reasoning as any,
-              supporting: consensus.chosenSetup.supportingFactors as any,
-              opposing: consensus.chosenSetup.opposingFactors as any,
-              marketRegime: consensus.chosenSetup.marketRegime,
-              session: 'London/New York',
-              status: 'SENT',
-              sentAt: new Date(),
-            },
+        for (const candidate of validCandidates) {
+          let { sym, consensus, dbStrategy } = candidate;
+
+          // Check if news straddle applies for users with newsFilterOn
+          const imminentEvent = upcomingNews.find((n) => {
+            const diffMin = Math.abs(new Date(n.time).getTime() - Date.now()) / (1000 * 60);
+            return diffMin <= 15 && sym.symbol.includes(n.currency);
           });
-        } catch (dbErr) {
-          console.error(`⚠️ Could not save signal for ${sym.symbol}:`, dbErr);
-        }
 
-        if (newSignal) {
-          console.log(`🔥 [SINGLE TOP SIGNAL GENERATED] ${sym.symbol} ${consensus.finalDirection} (${consensus.consensusScore}/100) Strategy: ${dbStrategy.name}`);
+          if (imminentEvent) {
+            const candles = await marketDataProvider.fetchCandles(sym.symbol, 'M15', 30);
+            if (candles.length >= 20) {
+              const newsStraddleResult = breakoutStrategy.generateNewsStraddle(
+                sym.symbol,
+                'M15',
+                candles,
+                imminentEvent.title,
+                sym.pipSize
+              );
+              consensus.chosenSetup = newsStraddleResult as any;
+              consensus.consensusScore = 92;
+              consensus.finalDirection = newsStraddleResult.direction;
+              console.log(`⚡ [NEWS STRADDLE GENERATED] High impact event ${imminentEvent.title} for ${sym.symbol}`);
+            }
+          }
 
-          // Dispatch Single Signal to Eligible Active Telegram Users
-          if (botService) {
-            const activeUsers = await prisma.telegramUser.findMany({
-              include: { user: { include: { watchlist: true, preferences: true } } },
+          const fingerprint = deduplicationService.generateFingerprint({
+            symbol: sym.symbol,
+            strategyCode: consensus.chosenSetup.strategyName,
+            direction: consensus.finalDirection,
+            timeframe: 'M15',
+          });
+
+          let newSignal;
+          try {
+            newSignal = await prisma.signal.create({
+              data: {
+                fingerprint,
+                symbolId: sym.id,
+                strategyId: dbStrategy.id,
+                timeframe: 'M15',
+                direction: consensus.finalDirection,
+                confidence: consensus.chosenSetup.confidence,
+                qualityScore: consensus.consensusScore,
+                entryMin: consensus.chosenSetup.entryZone.min,
+                entryMax: consensus.chosenSetup.entryZone.max,
+                stopLoss: consensus.chosenSetup.stopLoss,
+                tp1: consensus.chosenSetup.takeProfitLevels.tp1,
+                tp2: consensus.chosenSetup.takeProfitLevels.tp2,
+                tp3: consensus.chosenSetup.takeProfitLevels.tp3,
+                riskReward: consensus.chosenSetup.riskRewardRatio,
+                reasoning: consensus.chosenSetup.reasoning as any,
+                supporting: consensus.chosenSetup.supportingFactors as any,
+                opposing: consensus.chosenSetup.opposingFactors as any,
+                marketRegime: consensus.chosenSetup.marketRegime,
+                session: 'London/New York',
+                status: 'SENT',
+                sentAt: new Date(),
+              },
             });
+          } catch (dbErr) {
+            console.error(`⚠️ Could not save signal for ${sym.symbol}:`, dbErr);
+          }
 
+          if (newSignal && botService) {
+            console.log(`🔥 [SIGNAL CREATED] ${sym.symbol} ${consensus.finalDirection} (${consensus.consensusScore}/100) Strategy: ${dbStrategy.name}`);
             const now = new Date();
 
             for (const tu of activeUsers) {
@@ -318,7 +349,7 @@ async function bootstrap() {
                 if (
                   activeUserSignal &&
                   !activeUserSignal.closedAt &&
-                  !['CLOSED', 'TP3_HIT', 'SL_HIT', 'EXPIRED', 'INVALIDATED'].includes(activeUserSignal.status)
+                  ['SENT', 'ACTIVE', 'ENTRY_REACHED'].includes(activeUserSignal.status)
                 ) {
                   console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=ACTIVE_SIGNAL_IN_PROGRESS activeSignalId=${activeUserSignal.id}`);
                   hasActiveSignal = true;
@@ -389,11 +420,16 @@ async function bootstrap() {
 
               if (currentDailyCount < quota) {
                 console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=ACCEPT`);
-                const sent = await botService.sendFormattedSignal(String(tu.telegramId), {
-                  ...newSignal,
-                  marketSymbol: sym,
-                  strategyName: dbStrategy.name,
-                });
+                const userTz = tu.user.preferences?.timezone || 'UTC';
+                const sent = await botService.sendFormattedSignal(
+                  String(tu.telegramId),
+                  {
+                    ...newSignal,
+                    marketSymbol: sym,
+                    strategyName: dbStrategy.name,
+                  },
+                  userTz
+                );
 
                 if (sent) {
                   await prisma.telegramUser.update({

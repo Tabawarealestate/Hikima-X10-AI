@@ -245,9 +245,14 @@ export class TelegramBotService {
         });
       }
 
-      const statusText = currentVal ? '🟢 ACTIVE (High-Impact Events Filtered)' : '🔴 INACTIVE (All Market Events Processed)';
+      const statusText = currentVal ? '🟢 ACTIVE (High-Impact Straddle Activated)' : '🔴 INACTIVE (Standard Technical Processing)';
       await ctx.answerCbQuery(`News Filter: ${currentVal ? 'ON' : 'OFF'}`);
-      await this.cleanAndReply(ctx, `🔔 High-Impact News Filter updated: ${statusText}`);
+      const lang = await this.getUserLang(tgUser.id);
+      await this.cleanAndReply(
+        ctx,
+        `🔔 High-Impact News Filter updated: ${statusText}\n\nWhen News Filter is ON, high-impact news events (NFP, CPI, FOMC, GDP) automatically trigger 30-min range straddle setups!`,
+        this.getBottomReplyKeyboard(lang)
+      );
     });
 
     this.bot.action('edit_timeframes', async (ctx) => {
@@ -839,65 +844,43 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
     const dbUser = await prisma.telegramUser.findUnique({
       where: { telegramId: BigInt(tgUser.id) },
       include: {
-        user: {
-          include: {
-            watchlist: { include: { marketSymbol: true } },
-            preferences: true,
-          },
-        },
+        user: true,
       },
     });
 
-    const isPremium = dbUser?.user.accessType === 'PREMIUM';
-    const userWatchlistSymbolIds = new Set(dbUser?.user.watchlist.map((w) => w.symbolId) || []);
-    const prefStrategy = dbUser?.user.preferences?.preferredStrategy;
+    if (!dbUser) {
+      return this.cleanAndReply(ctx, 'Please register first by entering your Access Code X10H.');
+    }
 
-    const allActive = await prisma.signal.findMany({
-      where: { status: { in: ['SENT', 'ACTIVE', 'ENTRY_REACHED'] } },
+    // Query notifications delivered to THIS SPECIFIC USER to find active delivered signals
+    const userNotifs = await prisma.notification.findMany({
+      where: { userId: dbUser.userId },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+
+    const deliveredSignalIds = userNotifs.map((n) => n.title);
+
+    const activeDelivered = await prisma.signal.findMany({
+      where: {
+        id: { in: deliveredSignalIds },
+        status: { in: ['SENT', 'ACTIVE', 'ENTRY_REACHED', 'TP1_HIT', 'TP2_HIT', 'SL_MOVED_TO_ENTRY', 'BREAKEVEN'] },
+        closedAt: null,
+      },
       include: { marketSymbol: true, strategy: true },
       orderBy: { createdAt: 'desc' },
     });
 
-    // Deduplicate active signals by marketSymbol.id so user sees unique active setups
-    const uniqueBySymbol = new Map<string, typeof allActive[0]>();
-    for (const sig of allActive) {
-      if (!uniqueBySymbol.has(sig.symbolId)) {
-        uniqueBySymbol.set(sig.symbolId, sig);
-      }
-    }
-
-    let userFilteredSignals = Array.from(uniqueBySymbol.values());
-
-    // 1. Free Tier Limitation
-    if (!isPremium) {
-      userFilteredSignals = userFilteredSignals.filter((s) =>
-        ['EURUSD', 'NZDUSD'].includes(s.marketSymbol.symbol.replace('/', '').toUpperCase())
-      );
-    }
-
-    // 2. Watchlist Filter
-    if (userWatchlistSymbolIds.size > 0) {
-      userFilteredSignals = userFilteredSignals.filter((s) => userWatchlistSymbolIds.has(s.symbolId));
-    }
-
-    // 3. Strategy Filter
-    if (prefStrategy && prefStrategy !== 'AI_CONSENSUS' && prefStrategy !== 'ALL') {
-      const prefUpper = prefStrategy.toUpperCase();
-      userFilteredSignals = userFilteredSignals.filter(
-        (s) => s.strategy.code.toUpperCase().includes(prefUpper) || s.strategy.name.toUpperCase().includes(prefUpper)
-      );
-    }
-
-    if (userFilteredSignals.length === 0) {
+    if (activeDelivered.length === 0) {
       return this.cleanAndReply(
         ctx,
-        '📊 ACTIVE SIGNALS:\n\nNo active signals currently match your watchlist and strategy preferences. Continuous 24/7 market analysis running.',
+        '📊 YOUR ACTIVE SIGNALS:\n\nNo active signals currently generated for your account. Continuous 24/7 market analysis running.',
         this.getBottomReplyKeyboard(lang)
       );
     }
 
-    let text = `📊 YOUR ACTIVE SIGNALS (${userFilteredSignals.length}):\n\n`;
-    for (const s of userFilteredSignals) {
+    let text = `📊 YOUR ACTIVE DELIVERED SIGNALS (${activeDelivered.length}):\n\n`;
+    for (const s of activeDelivered) {
       const progressBar = this.getProgressBar(s.qualityScore);
       text += `• ${s.marketSymbol.symbol} (${s.direction})\n  Strategy: ${s.strategy.name}\n  Timeframe: ${s.timeframe}\n  Entry: ${s.entryMin.toFixed(2)} - ${s.entryMax.toFixed(2)}\n  Quality: ${s.qualityScore}/100 ${progressBar}\n  Status: ${s.status}\n\n`;
     }
@@ -1035,13 +1018,22 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
     return `[${'█'.repeat(filled)}${'░'.repeat(10 - filled)}]`;
   }
 
-  async sendFormattedSignal(chatId: string | number, signal: any): Promise<boolean> {
+  async sendFormattedSignal(chatId: string | number, signal: any, timezone = 'UTC'): Promise<boolean> {
     try {
       const isBuy = signal.direction === 'BUY';
       const directionEmoji = isBuy ? '🟢 BUY' : '🔴 SELL';
       const progressBar = this.getProgressBar(signal.qualityScore || 86);
       const symbol = signal.marketSymbol ? signal.marketSymbol.symbol : signal.symbol;
       const digits = symbol.includes('JPY') ? 3 : symbol.includes('XAU') ? 2 : 5;
+
+      const now = new Date();
+      let tzOffsetHours = 0;
+      if (timezone === 'IST') tzOffsetHours = 5.5;
+      else if (timezone === 'WAT') tzOffsetHours = 1.0;
+      else if (timezone === 'EST') tzOffsetHours = -5.0;
+
+      const localTime = new Date(now.getTime() + tzOffsetHours * 3600 * 1000);
+      const formattedTimeStr = `${localTime.toISOString().replace('T', ' ').slice(0, 16)} ${timezone}`;
 
       const formattedMessage = `━━━━━━━━━━━━━━━━━━━━
 🔥 HIKIMA X10 AI
@@ -1053,7 +1045,7 @@ ${directionEmoji}
 
 📌 Strategy: ${signal.strategy ? signal.strategy.name : signal.strategyName}
 ⏱ Timeframe: ${signal.timeframe}
-🕐 Signal Time: ${new Date().toISOString().replace('T', ' ').slice(0, 16)} UTC
+🕐 Signal Time: ${formattedTimeStr}
 
 🎯 Entry Zone:
 ${signal.entryMin.toFixed(digits)} – ${signal.entryMax.toFixed(digits)}

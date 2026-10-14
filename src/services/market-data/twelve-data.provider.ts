@@ -28,6 +28,8 @@ export class TwelveDataProvider implements MarketDataProvider {
   }
 
   private rateLimitCooldownUntil = 0;
+  private candleCache = new Map<string, { candles: Candle[]; cachedAt: number }>();
+  private cacheTtlMs = 5 * 60 * 1000;
 
   private formatSymbol(symbol: string): string {
     const clean = symbol.trim().toUpperCase().replace('/', '');
@@ -42,8 +44,14 @@ export class TwelveDataProvider implements MarketDataProvider {
   }
 
   async fetchCandles(symbol: string, timeframe: string, limit = 100): Promise<Candle[]> {
+    const cacheKey = `${symbol.toUpperCase()}:${timeframe}`;
+    const cached = this.candleCache.get(cacheKey);
+    if (cached && Date.now() - cached.cachedAt < this.cacheTtlMs) {
+      return cached.candles;
+    }
+
     if (Date.now() < this.rateLimitCooldownUntil) {
-      return [];
+      return cached ? cached.candles : [];
     }
     try {
       const formattedSymbol = this.formatSymbol(symbol);
@@ -78,9 +86,11 @@ export class TwelveDataProvider implements MarketDataProvider {
       }));
 
       // Return chronological order (oldest to newest)
-      return candles.reverse();
+      const sorted = candles.reverse();
+      this.candleCache.set(cacheKey, { candles: sorted, cachedAt: Date.now() });
+      return sorted;
     } catch (err) {
-      return [];
+      return cached ? cached.candles : [];
     }
   }
 

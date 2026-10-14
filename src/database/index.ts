@@ -117,4 +117,22 @@ export async function seedInitialData() {
       create: set,
     });
   }
+
+  // 6. Clean up legacy unclosed test signals created > 12h ago
+  try {
+    const twelveHoursAgo = new Date(Date.now() - 12 * 3600 * 1000);
+    await prisma.signal.updateMany({
+      where: {
+        createdAt: { lt: twelveHoursAgo },
+        closedAt: null,
+      },
+      data: {
+        status: 'EXPIRED',
+        closedAt: new Date(),
+        result: 'EXPIRED',
+      },
+    });
+  } catch (err) {
+    console.error('⚠️ Legacy signal cleanup warning:', err);
+  }
 }
