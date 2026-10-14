@@ -4,7 +4,7 @@ import { prisma } from '../../database';
 import { CryptoMusService } from '../../services/subscription/cryptomus.service';
 import { getText } from '../../packages/shared/i18n';
 
-export const HIKIMA_SIGNAL_ENGINE_VERSION = '2.1.0-dedup';
+export const HIKIMA_SIGNAL_ENGINE_VERSION = '2.2.0-standalone';
 export const HIKIMA_BUILD_COMMIT = 'faf929fe423dbd274b34231c57b4eb3048969e5e';
 export const HIKIMA_START_TIMESTAMP = new Date().toISOString();
 

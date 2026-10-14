@@ -349,7 +349,7 @@ async function bootstrap() {
                 if (
                   activeUserSignal &&
                   !activeUserSignal.closedAt &&
-                  ['SENT', 'ACTIVE', 'ENTRY_REACHED'].includes(activeUserSignal.status)
+                  ['SENT', 'ACTIVE', 'ENTRY_REACHED', 'TP1_HIT', 'TP2_HIT', 'BREAKEVEN', 'SL_MOVED_TO_ENTRY', 'PARTIAL_CLOSED'].includes(activeUserSignal.status)
                 ) {
                   console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=ACTIVE_SIGNAL_IN_PROGRESS activeSignalId=${activeUserSignal.id}`);
                   hasActiveSignal = true;
