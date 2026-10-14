@@ -2,6 +2,7 @@ import { Telegraf, Markup } from 'telegraf';
 import { config } from '../../config';
 import { prisma } from '../../database';
 import { CryptoMusService } from '../../services/subscription/cryptomus.service';
+import { TradingAIAssistantService } from '../../services/ai-assistant/trading-assistant.service';
 import { getText } from '../../packages/shared/i18n';
 
 export const HIKIMA_SIGNAL_ENGINE_VERSION = '2.2.0-standalone';
@@ -11,6 +12,7 @@ export const HIKIMA_START_TIMESTAMP = new Date().toISOString();
 export class TelegramBotService {
   public bot: Telegraf;
   private cryptomusService = new CryptoMusService();
+  private aiAssistantService = new TradingAIAssistantService();
   private channelUsername = '@hikimaaipalace';
   private channelUrl = 'https://t.me/hikimaaipalace';
 
@@ -152,7 +154,7 @@ export class TelegramBotService {
         const inlineKb = Markup.inlineKeyboard([
           [Markup.button.callback('📊 Active Signals', 'menu_signals'), Markup.button.callback('📈 Watchlist & Markets', 'menu_markets')],
           [Markup.button.callback('🧠 Strategy Engine', 'menu_strategies'), Markup.button.callback('💎 Premium Plans', 'menu_subscribe')],
-          [Markup.button.callback('⚡ AI Live Scan Status', 'menu_scan_status'), Markup.button.callback('📊 Performance', 'menu_performance')],
+          [Markup.button.callback('🤖 Trading AI Assistant', 'menu_ai_chat'), Markup.button.callback('📊 Performance', 'menu_performance')],
           [Markup.button.callback('⚙️ User Settings', 'menu_settings'), Markup.button.callback('❓ Help & Support', 'menu_help')],
         ]);
 
@@ -402,8 +404,23 @@ export class TelegramBotService {
       return next();
     });
 
+    // 4b. AI Chat Assistant Command (/ask <question>)
+    this.bot.command('ask', async (ctx) => {
+      const tgUser = ctx.from;
+      const isMember = await this.checkChannelMembership(tgUser.id);
+      if (!isMember) return this.renderChannelRequiredScreen(ctx, tgUser.username ? `@${tgUser.username}` : tgUser.first_name);
+
+      const question = ctx.message.text.replace('/ask', '').trim();
+      if (!question) {
+        return ctx.reply('🤖 TRADING AI CHAT ASSISTANT:\n\nPlease ask a trading question. Example:\n/ask How does SMC liquidity sweep work?');
+      }
+
+      const answer = this.aiAssistantService.answerTradingQuestion(question);
+      return ctx.reply(answer);
+    });
+
     // 5. Commands
-    this.bot.command(['menu', 'signals', 'markets', 'strategies', 'settings', 'performance', 'subscription', 'subscribe', 'help', 'support', 'status', 'scan', 'stop'], async (ctx) => {
+    this.bot.command(['menu', 'signals', 'markets', 'strategies', 'settings', 'performance', 'subscription', 'subscribe', 'help', 'support', 'status', 'scan', 'stop', 'ask'], async (ctx) => {
       const tgUser = ctx.from;
       const isMember = await this.checkChannelMembership(tgUser.id);
       if (!isMember) return this.renderChannelRequiredScreen(ctx, tgUser.username ? `@${tgUser.username}` : tgUser.first_name);
@@ -471,6 +488,12 @@ export class TelegramBotService {
       await ctx.answerCbQuery();
       await ctx.deleteMessage().catch(() => {});
       await this.renderScanStatus(ctx);
+    });
+    this.bot.action('menu_ai_chat', async (ctx) => {
+      await ctx.answerCbQuery('Trading AI Assistant');
+      await ctx.deleteMessage().catch(() => {});
+      const text = this.aiAssistantService.answerTradingQuestion('');
+      await this.cleanAndReply(ctx, text, this.getBottomReplyKeyboard(await this.getUserLang(ctx.from.id)));
     });
 
     // 7. Watchlist Category Selection Actions (Crypto, Forex, Metals, Commodities, Indices, Stocks)
