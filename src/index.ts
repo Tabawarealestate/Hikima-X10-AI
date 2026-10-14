@@ -120,10 +120,32 @@ async function bootstrap() {
           });
 
           for (const notif of recipientNotifications) {
-            const tgId = notif.user.telegramUser?.telegramId;
-            if (tgId) {
-              botService.bot.telegram.sendMessage(String(tgId), ev.message).catch(() => {});
+            const user = notif.user;
+            const tgId = user.telegramUser?.telegramId;
+            if (!tgId) continue;
+
+            const isPremium = user.accessType === 'PREMIUM';
+            const symClean = ev.symbol.replace('/', '').toUpperCase();
+
+            // 1. Free tier symbol check
+            if (!isPremium && !['EURUSD', 'ETHUSD'].includes(symClean)) {
+              continue;
             }
+
+            // 2. Watchlist check: Only send monitoring event if symbol is in user's active watchlist
+            const userWatchlist = await prisma.watchlist.findMany({
+              where: { userId: user.id },
+              include: { marketSymbol: true },
+            });
+
+            if (userWatchlist.length > 0) {
+              const selectedSymbols = new Set(userWatchlist.map((w) => w.marketSymbol.symbol.replace('/', '').toUpperCase()));
+              if (!selectedSymbols.has(symClean)) {
+                continue; // User did NOT select this symbol! Skip notification.
+              }
+            }
+
+            botService.bot.telegram.sendMessage(String(tgId), ev.message).catch(() => {});
           }
         }
       }
@@ -276,27 +298,36 @@ async function bootstrap() {
               const isPremium = tu.user.accessType === 'PREMIUM';
               const trialExpired = tu.user.accessType === 'FREE' && tu.user.trialEndDate && now > new Date(tu.user.trialEndDate);
 
-              if (trialExpired) continue;
+              if (trialExpired) {
+                console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=TRIAL_EXPIRED`);
+                continue;
+              }
 
               // HARD LIMIT: Max 1 Active Signal Per User (User must wait until current signal is CLOSED)
-              const lastUserNotif = await prisma.notification.findFirst({
+              const recentUserNotifs = await prisma.notification.findMany({
                 where: { userId: tu.userId },
                 orderBy: { createdAt: 'desc' },
+                take: 10,
               });
 
-              if (lastUserNotif) {
+              let hasActiveSignal = false;
+              for (const notif of recentUserNotifs) {
                 const activeUserSignal = await prisma.signal.findUnique({
-                  where: { id: lastUserNotif.title },
+                  where: { id: notif.title },
                 });
                 if (
                   activeUserSignal &&
                   !activeUserSignal.closedAt &&
-                  ['SENT', 'ACTIVE', 'ENTRY_REACHED', 'TP1_HIT', 'TP2_HIT', 'SL_MOVED_TO_ENTRY', 'BREAKEVEN'].includes(
-                    activeUserSignal.status
-                  )
+                  !['CLOSED', 'TP3_HIT', 'SL_HIT', 'EXPIRED', 'INVALIDATED'].includes(activeUserSignal.status)
                 ) {
-                  continue; // User currently has an open active signal in progress.
+                  console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=ACTIVE_SIGNAL_IN_PROGRESS activeSignalId=${activeUserSignal.id}`);
+                  hasActiveSignal = true;
+                  break;
                 }
+              }
+
+              if (hasActiveSignal) {
+                continue; // User currently has an open active signal in progress.
               }
 
               // 1. Free Users Symbol & Welcome Rule (EURUSD / ETHUSD, or 1-time XAUUSD welcome signal)
@@ -306,6 +337,7 @@ async function bootstrap() {
                 const isAllowedFreePair = ['EURUSD', 'ETHUSD'].includes(symClean) && dbStrategy.code === 'SMC';
 
                 if (!isXauWelcome && !isAllowedFreePair) {
+                  console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=FREE_PAIR_NOT_ALLOWED`);
                   continue;
                 }
               }
@@ -314,12 +346,14 @@ async function bootstrap() {
               if (tu.user.watchlist && tu.user.watchlist.length > 0) {
                 const userSelectedSymbolIds = new Set(tu.user.watchlist.map((w) => w.symbolId));
                 if (!userSelectedSymbolIds.has(sym.id)) {
+                  console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=SYMBOL_NOT_IN_WATCHLIST`);
                   continue;
                 }
               } else if (isPremium) {
                 // Default top symbols for Premium users with empty watchlist
                 const defaultPremiumSymbols = ['XAUUSD', 'EURUSD', 'GBPUSD', 'BTCUSD', 'USOIL'];
                 if (!defaultPremiumSymbols.includes(symClean)) {
+                  console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=SYMBOL_NOT_IN_DEFAULT_PREMIUM_WATCHLIST`);
                   continue;
                 }
               }
@@ -330,6 +364,7 @@ async function bootstrap() {
                 const stratCodeUpper = dbStrategy.code.toUpperCase();
                 const prefUpper = prefStrategy.toUpperCase();
                 if (!stratCodeUpper.includes(prefUpper) && !dbStrategy.name.toUpperCase().includes(prefUpper)) {
+                  console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=STRATEGY_MISMATCH userPref=${prefStrategy}`);
                   continue;
                 }
               }
@@ -339,18 +374,21 @@ async function bootstrap() {
                 ? tu.user.preferences.selectedTimeframes.split(',').map((t) => t.trim().toUpperCase())
                 : ['M15', 'H1', 'H4'];
               if (!prefTimeframes.includes(newSignal.timeframe.toUpperCase())) {
+                console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=TIMEFRAME_MISMATCH signalTf=${newSignal.timeframe}`);
                 continue;
               }
 
               // 5. Min Quality Score Threshold Filter
               const minScore = tu.user.preferences?.minQualityScore || 75;
               if (newSignal.qualityScore < minScore) {
+                console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=QUALITY_SCORE_BELOW_MIN score=${newSignal.qualityScore} minScore=${minScore}`);
                 continue;
               }
 
               const quota = isPremium ? 5 : 1;
 
               if (currentDailyCount < quota) {
+                console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=ACCEPT`);
                 const sent = await botService.sendFormattedSignal(String(tu.telegramId), {
                   ...newSignal,
                   marketSymbol: sym,
@@ -376,6 +414,8 @@ async function bootstrap() {
                     },
                   });
                 }
+              } else {
+                console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=DAILY_QUOTA_REACHED count=${currentDailyCount} quota=${quota}`);
               }
             }
           }
