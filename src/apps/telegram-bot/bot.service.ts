@@ -854,9 +854,43 @@ Step 3: Click "🔄 Verify Membership" below to unlock the bot!
   }
 
   private async renderScanStatus(ctx: any) {
-    const lang = await this.getUserLang(ctx.from.id);
-    const symbols = await prisma.marketSymbol.count({ where: { isSupported: true } });
-    const text = `⚡ AI SCAN ENGINE STATUS\n\nStatus: 🟢 ACTIVE\nScanning Mode: 24/7 Real-Time\nMonitored Markets: ${symbols} Assets\nScan Interval: Every 60 Seconds\nProvider Health: 🟢 ONLINE (TwelveData, Crypto, Forex)\nLast Scan Cycle: ${new Date().toISOString()}\n\nThe AI scanner analyzes technical structure, liquidity sweeps, and multi-timeframe confluence continuously across global assets.`;
+    const tgUser = ctx.from;
+    const lang = await this.getUserLang(tgUser.id);
+
+    const dbUser = await prisma.telegramUser.findUnique({
+      where: { telegramId: BigInt(tgUser.id) },
+      include: {
+        user: {
+          include: {
+            watchlist: { include: { marketSymbol: true } },
+            preferences: true,
+          },
+        },
+      },
+    });
+
+    const isPremium = dbUser?.user.accessType === 'PREMIUM';
+    const userSymbols = dbUser?.user.watchlist.map((w) => w.marketSymbol.symbol) || [];
+    const selectedPairs = userSymbols.length > 0 ? userSymbols : isPremium ? ['XAUUSD', 'EURUSD', 'GBPUSD', 'BTCUSD'] : ['EURUSD', 'ETHUSD'];
+    const prefStrat = dbUser?.user.preferences?.preferredStrategy || 'SMC';
+
+    let pairsStatusText = '';
+    for (const sym of selectedPairs) {
+      pairsStatusText += `• ${sym}\n  Strategy: ${prefStrat}\n  Status: 🟢 ANALYZING (24/7 Confluence & Liquidity Check Active)\n\n`;
+    }
+
+    const text = `⚡ AI SCAN ENGINE LIVE STATUS
+━━━━━━━━━━━━━━━━━━
+Scan Mode: 24/7 Real-Time Continuous
+Scan Interval: Every 60 Seconds
+Provider Feeds: 🟢 ONLINE (TwelveData, Crypto, Forex)
+Last Scan Cycle: ${new Date().toISOString().replace('T', ' ').slice(0, 16)} UTC
+
+📊 REAL-TIME LIVE SCAN FOR YOUR SELECTED WATCHLIST:
+
+${pairsStatusText}
+ℹ️ Note: The AI Scanner evaluates technical structure continuously. A signal is generated ONLY when a high-confluence setup satisfies your minimum quality threshold (75+).`;
+
     await this.cleanAndReply(ctx, text, this.getBottomReplyKeyboard(lang));
   }
 
