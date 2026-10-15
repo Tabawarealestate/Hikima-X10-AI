@@ -334,14 +334,16 @@ async function bootstrap() {
                 continue;
               }
 
-              // HARD LIMIT: Max 1 Active Signal Per User (User must wait until current signal is CLOSED)
+              // PER-SYMBOL ACTIVE SIGNAL LIMIT: Max 1 active open signal per symbol per user
               const recentUserNotifs = await prisma.notification.findMany({
                 where: { userId: tu.userId },
                 orderBy: { createdAt: 'desc' },
-                take: 10,
+                take: 20,
               });
 
-              let hasActiveSignal = false;
+              let activeSymbolSignalExists = false;
+              let activeTotalCount = 0;
+
               for (const notif of recentUserNotifs) {
                 const activeUserSignal = await prisma.signal.findUnique({
                   where: { id: notif.title },
@@ -349,16 +351,26 @@ async function bootstrap() {
                 if (
                   activeUserSignal &&
                   !activeUserSignal.closedAt &&
-                  ['SENT', 'ACTIVE', 'ENTRY_REACHED', 'TP1_HIT', 'TP2_HIT', 'BREAKEVEN', 'SL_MOVED_TO_ENTRY', 'PARTIAL_CLOSED'].includes(activeUserSignal.status)
+                  ['SENT', 'ACTIVE', 'ENTRY_REACHED'].includes(activeUserSignal.status)
                 ) {
-                  console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=ACTIVE_SIGNAL_IN_PROGRESS activeSignalId=${activeUserSignal.id}`);
-                  hasActiveSignal = true;
-                  break;
+                  activeTotalCount++;
+                  if (activeUserSignal.symbolId === sym.id) {
+                    console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=ACTIVE_SIGNAL_FOR_SYMBOL_IN_PROGRESS activeSignalId=${activeUserSignal.id}`);
+                    activeSymbolSignalExists = true;
+                    break;
+                  }
                 }
               }
 
-              if (hasActiveSignal) {
-                continue; // User currently has an open active signal in progress.
+              if (activeSymbolSignalExists) {
+                continue; // User already has an active pending signal on this exact symbol
+              }
+
+              // Overall concurrent active signal cap (Free: 1, Premium: 3)
+              const maxConcurrentActive = isPremium ? 3 : 1;
+              if (activeTotalCount >= maxConcurrentActive) {
+                console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=MAX_CONCURRENT_ACTIVE_SIGNALS_REACHED activeCount=${activeTotalCount}`);
+                continue;
               }
 
               // 1. Free Users Symbol & Welcome Rule (EURUSD / ETHUSD, or 1-time XAUUSD welcome signal)

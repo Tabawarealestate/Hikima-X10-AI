@@ -101,11 +101,11 @@ export class SignalMonitoringWorker {
       }
     }
 
-    // 4. Signal Expiration Check (24h without entry)
+    // 4. Signal Expiration Check (4h without entry)
     const hoursSinceCreation = (Date.now() - new Date(signal.createdAt).getTime()) / (1000 * 3600);
-    if (prevStatus === 'SENT' && hoursSinceCreation > 24 && !isSlHit) {
+    if (prevStatus === 'SENT' && hoursSinceCreation > 4 && !isSlHit) {
       newStatus = 'EXPIRED';
-      notificationMsg = `⚪ ${signal.marketSymbol.symbol} SIGNAL EXPIRED: Entry zone not reached within 24 hours.`;
+      notificationMsg = `⚪ ${signal.marketSymbol.symbol} SIGNAL EXPIRED: Entry zone not reached within 4 hours.`;
     }
 
     // If state changed, verify this event hasn't already been emitted for this signal ID
