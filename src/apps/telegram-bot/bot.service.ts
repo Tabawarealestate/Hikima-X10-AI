@@ -257,6 +257,34 @@ export class TelegramBotService {
       );
     });
 
+    this.bot.action('toggle_muslim_activities', async (ctx) => {
+      const tgUser = ctx.from;
+      const dbUser = await prisma.telegramUser.findUnique({
+        where: { telegramId: BigInt(tgUser.id) },
+        include: { user: { include: { preferences: true } } },
+      });
+
+      let currentVal = false;
+      if (dbUser) {
+        const pref = await prisma.userPreference.findUnique({ where: { userId: dbUser.userId } });
+        currentVal = pref ? !pref.muslimActivities : true;
+        await prisma.userPreference.upsert({
+          where: { userId: dbUser.userId },
+          update: { muslimActivities: currentVal },
+          create: { userId: dbUser.userId, muslimActivities: currentVal },
+        });
+      }
+
+      const statusText = currentVal ? '🟢 ON (Friday & Ramadan Supplication Reminders Enabled)' : '🔴 OFF (No Religious Messages)';
+      await ctx.answerCbQuery(`Muslim Activities: ${currentVal ? 'ON' : 'OFF'}`);
+      const lang = await this.getUserLang(tgUser.id);
+      await this.cleanAndReply(
+        ctx,
+        `🌙 Muslim Activities Setting: ${statusText}\n\nWhen ON, you receive authentic Friday Salawat reminders, Ramadan Suhoor & Iftar du'as (Sunan Abi Dawud 2357), and Eid greetings. Market notifications remain fully active.`,
+        this.getBottomReplyKeyboard(lang)
+      );
+    });
+
     this.bot.action('edit_timeframes', async (ctx) => {
       await ctx.answerCbQuery('Timeframes');
       await this.cleanAndReply(ctx, '⏱ Select Your Preferred Signal Timeframe Filter:', Markup.inlineKeyboard([
@@ -272,6 +300,8 @@ export class TelegramBotService {
         where: { telegramId: BigInt(tgUser.id) },
         include: { user: true },
       });
+
+      if (!dbUser) return ctx.reply('Please register first by entering your Access Code X10H.');
 
       if (dbUser) {
         const val = tfChoice === 'ALL' ? 'M15,H1,H4,D1' : tfChoice;
@@ -301,6 +331,8 @@ export class TelegramBotService {
         where: { telegramId: BigInt(tgUser.id) },
         include: { user: true },
       });
+
+      if (!dbUser) return ctx.reply('Please register first by entering your Access Code X10H.');
 
       if (dbUser) {
         await prisma.userPreference.upsert({
@@ -1002,6 +1034,7 @@ ${pairsStatusText}
       [Markup.button.callback('🧪 Alchemist', 'select_strat_ALCHEMIST')],
       [Markup.button.callback('📈 Trend Following', 'select_strat_TREND')],
       [Markup.button.callback('💥 Breakout Engine', 'select_strat_BREAKOUT')],
+      [Markup.button.callback('⚡ Quick Scalping (🔒 Premium)', 'select_strat_QUICK_SCALPING')],
     ]);
     await this.cleanAndReply(ctx, text, keyboard);
   }
@@ -1040,13 +1073,15 @@ ${pairsStatusText}
     const timeframes = prefs?.selectedTimeframes || 'M15,H1,H4';
     const minScore = prefs?.minQualityScore || 75;
     const newsFilter = prefs?.newsFilterOn ? 'ON' : 'OFF';
+    const muslimAct = prefs?.muslimActivities ? 'ON' : 'OFF';
 
-    const text = `⚙️ USER SETTINGS & PROFILE CUSTOMIZATION:\n\n• Current Language: ${lang.toUpperCase()}\n• Display Timezone: ${prefs?.timezone || 'UTC'}\n• Enabled Timeframes: ${timeframes}\n• Min Quality Score: ${minScore}/100\n• News Filter: ${newsFilter}\n• Official Channel: Joined @hikimaaipalace\n\nSelect an option below to customize your signal delivery:`;
+    const text = `⚙️ USER SETTINGS & PROFILE CUSTOMIZATION:\n\n• Current Language: ${lang.toUpperCase()}\n• Display Timezone: ${prefs?.timezone || 'UTC'}\n• Enabled Timeframes: ${timeframes}\n• Min Quality Score: ${minScore}/100\n• High-Impact News Filter: ${newsFilter}\n• Muslim Activities (Optional): ${muslimAct}\n• Official Channel: Joined @hikimaaipalace\n\nSelect an option below to customize your profile settings:`;
 
     await this.cleanAndReply(ctx, text, Markup.inlineKeyboard([
       [Markup.button.callback('🌐 Language', 'edit_lang'), Markup.button.callback('🕒 Timezone', 'edit_tz')],
       [Markup.button.callback('⏱ Timeframes', 'edit_timeframes'), Markup.button.callback('⭐ Quality Score', 'edit_min_score')],
       [Markup.button.callback('🔔 Toggle News Filter', 'toggle_news_filter')],
+      [Markup.button.callback(`🌙 Muslim Activities (${muslimAct})`, 'toggle_muslim_activities')],
     ]));
   }
 

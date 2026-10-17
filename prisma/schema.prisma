@@ -403,6 +403,7 @@ model UserPreference {
   selectedTimeframes String  @default("M15,H1,H4")
   minQualityScore   Int      @default(75)
   newsFilterOn      Boolean  @default(true)
+  muslimActivities  Boolean  @default(false)
   alertNewSignal    Boolean  @default(true)
   alertTp1          Boolean  @default(true)
   alertTp2          Boolean  @default(true)

@@ -5,6 +5,7 @@ import { TrendFollowingStrategy } from './trend.strategy';
 import { BreakoutStrategy } from './breakout.strategy';
 import { ReversalStrategy } from './reversal.strategy';
 import { SupplyDemandStrategy } from './supply-demand.strategy';
+import { QuickScalpingStrategy } from './quick-scalping.strategy';
 import { Candle } from '../../packages/indicators/indicators';
 
 export interface ConsensusResult {
@@ -31,6 +32,7 @@ export class EnsembleEngine {
       new BreakoutStrategy(),
       new ReversalStrategy(),
       new SupplyDemandStrategy(),
+      new QuickScalpingStrategy(),
     ];
   }
 

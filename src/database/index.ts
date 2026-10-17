@@ -26,6 +26,7 @@ export async function seedInitialData() {
     { code: 'BREAKOUT', name: 'Breakout Engine', description: 'Support/Resistance & Range expansion with volume confirmation', requiresPremium: false },
     { code: 'REVERSAL', name: 'Mean Reversion & Reversal', description: 'Statistical overextension, RSI divergence, rejection candles', requiresPremium: true },
     { code: 'SD', name: 'Supply & Demand', description: 'Fresh zone identification and displacement origin', requiresPremium: false },
+    { code: 'QUICK_SCALPING', name: 'Quick Scalping', description: 'Fast micro-timeframe momentum scalping for M1/M5/M15', requiresPremium: true },
     { code: 'MARTINGALE', name: 'Martingale (Controlled)', description: 'Hard risk-bounded position escalation (Disabled by default)', requiresPremium: true },
     { code: 'ANTI_MARTINGALE', name: 'Anti-Martingale', description: 'Position scaling only after winning trades', requiresPremium: true },
     { code: 'GRID', name: 'Grid Trading', description: 'Configurable grid spacing with strict volatility filter', requiresPremium: true },

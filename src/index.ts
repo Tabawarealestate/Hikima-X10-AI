@@ -1,6 +1,7 @@
 import { app } from './apps/api/app';
 import { TelegramBotService } from './apps/telegram-bot/bot.service';
 import { CompositeMarketDataProvider } from './services/market-data';
+import { MarketCalendarService } from './services/market-data/market-calendar.service';
 import { EconomicNewsService } from './services/market-data/news.service';
 import { SignalMonitoringWorker } from './services/monitoring/signal-monitor.worker';
 import { EnsembleEngine } from './services/strategy-engine/ensemble.engine';
@@ -70,6 +71,7 @@ async function bootstrap() {
 
   // 2. Initialize Core Services
   const marketDataProvider = new CompositeMarketDataProvider();
+  const marketCalendar = new MarketCalendarService();
   const newsService = new EconomicNewsService();
   const monitoringWorker = new SignalMonitoringWorker(marketDataProvider);
   const ensembleEngine = new EnsembleEngine();
@@ -173,6 +175,11 @@ async function bootstrap() {
       const validCandidates: any[] = [];
 
       for (const sym of symbols) {
+        if (!marketCalendar.isMarketTradableNow(sym.symbol)) {
+          console.log(`[SignalEngine] symbol=${sym.symbol} decision=REJECT reason=MARKET_CLOSED`);
+          continue;
+        }
+
         const candles = await marketDataProvider.fetchCandles(sym.symbol, 'M15', 60);
         if (candles.length < 30) continue;
 
