@@ -12,12 +12,9 @@ import { config } from './config';
 import { prisma, seedInitialData } from './database';
 
 let botService: TelegramBotService | null = null;
-let monitoringInterval: NodeJS.Timeout | null = null;
-let scannerInterval: NodeJS.Timeout | null = null;
-
-// Concurrency Guards
-let isMonitoring = false;
-let isScanning = false;
+let monitoringTimeout: NodeJS.Timeout | null = null;
+let scannerTimeout: NodeJS.Timeout | null = null;
+let isRunning = true;
 
 // Task 5: Global Process Exception Safety
 process.on('unhandledRejection', (reason, promise) => {
@@ -32,8 +29,9 @@ process.on('uncaughtException', (error) => {
 async function gracefulShutdown(signal: string) {
   console.log(`\n🛑 [SHUTDOWN] Received ${signal}. Initiating production-safe graceful shutdown...`);
 
-  if (monitoringInterval) clearInterval(monitoringInterval);
-  if (scannerInterval) clearInterval(scannerInterval);
+  isRunning = false;
+  if (monitoringTimeout) clearTimeout(monitoringTimeout);
+  if (scannerTimeout) clearTimeout(scannerTimeout);
 
   if (botService) {
     try {
@@ -106,14 +104,9 @@ async function bootstrap() {
     }
   }
 
-  // 5. Start Background Signal Monitoring Worker Loop with Concurrency Guard (Task 5)
-  monitoringInterval = setInterval(async () => {
-    if (isMonitoring) {
-      console.log('⏳ [MONITOR] Previous monitoring cycle still running. Skipping overlapping cycle.');
-      return;
-    }
-
-    isMonitoring = true;
+  // 5. Start Background Signal Monitoring Worker Loop (Sequential non-overlapping execution)
+  const scheduleMonitoring = async () => {
+    if (!isRunning) return;
     try {
       const events = await monitoringWorker.checkActiveSignals();
       for (const ev of events) {
@@ -158,25 +151,21 @@ async function bootstrap() {
     } catch (err) {
       console.error('⚠️ Signal monitoring worker error:', err);
     } finally {
-      isMonitoring = false;
+      if (isRunning) {
+        monitoringTimeout = setTimeout(scheduleMonitoring, 30000);
+      }
     }
-  }, 15000);
+  };
 
-  // 6. Start Market Scanner Loop with Concurrency Guard (Task 5)
-  scannerInterval = setInterval(async () => {
-    if (isScanning) {
-      console.log('⏳ [SCANNER] Previous scanning cycle still running. Skipping overlapping cycle.');
-      return;
-    }
-
-    isScanning = true;
+  // 6. Start Market Scanner Loop (Sequential non-overlapping execution)
+  const scheduleScanner = async () => {
+    if (!isRunning) return;
     try {
       const symbols = await prisma.marketSymbol.findMany({ where: { isSupported: true } });
       const validCandidates: any[] = [];
 
       for (const sym of symbols) {
         if (!marketCalendar.isMarketTradableNow(sym.symbol)) {
-          console.log(`[SignalEngine] symbol=${sym.symbol} decision=REJECT reason=MARKET_CLOSED`);
           continue;
         }
 
@@ -479,9 +468,15 @@ async function bootstrap() {
     } catch (err) {
       console.error('⚠️ Market scanner error:', err);
     } finally {
-      isScanning = false;
+      if (isRunning) {
+        scannerTimeout = setTimeout(scheduleScanner, 60000);
+      }
     }
-  }, 60000);
+  };
+
+  // Launch background tasks
+  scheduleMonitoring();
+  scheduleScanner();
 }
 
 if (process.env.NODE_ENV !== 'test') {

@@ -62,6 +62,9 @@ export class SignalMonitoringWorker {
     let recoveryMsg: string | undefined = undefined;
 
     const isBuy = signal.direction === 'BUY';
+    const monitoringRecord = signal.monitoring;
+    const hasReachedEntry = prevStatus !== 'SENT' || monitoringRecord?.isNotifiedEntry === true;
+    const hasHitAnyTp = monitoringRecord?.isNotifiedTp1 === true || monitoringRecord?.isNotifiedTp2 === true || monitoringRecord?.isNotifiedTp3 === true;
 
     // 1. Entry Reached Check
     if (prevStatus === 'SENT' || prevStatus === 'ACTIVE') {
@@ -78,13 +81,23 @@ export class SignalMonitoringWorker {
     // 2. Stop Loss Check
     const isSlHit = isBuy ? currentPrice <= signal.stopLoss : currentPrice >= signal.stopLoss;
     if (isSlHit) {
-      newStatus = 'SL_HIT';
-      notificationMsg = `🔴 ${signal.marketSymbol.symbol} STOP LOSS HIT at ${currentPrice.toFixed(2)}. Setup invalidated.`;
-      recoveryMsg = `🔎 RECOVERY ANALYSIS for ${signal.marketSymbol.symbol}:\nPrevious ${signal.direction} setup failed. Current structure invalidated. Monitoring for new structural confirmation before re-entry. (No automatic revenge trade).`;
+      if (!hasReachedEntry) {
+        // Price hit SL BEFORE entry was ever reached -> Invalidated, NOT a loss!
+        newStatus = 'INVALIDATED';
+        notificationMsg = `⚪ ${signal.marketSymbol.symbol} SETUP INVALIDATED: Price broke stop loss before entry zone was reached. Setup cancelled.`;
+      } else {
+        newStatus = 'SL_HIT';
+        if (hasHitAnyTp) {
+          notificationMsg = `🛡 ${signal.marketSymbol.symbol} STOP LOSS REACHED AT BREAKEVEN (${currentPrice.toFixed(2)}). Trade closed with partial TP profits secured!`;
+        } else {
+          notificationMsg = `🔴 ${signal.marketSymbol.symbol} STOP LOSS HIT at ${currentPrice.toFixed(2)}. Setup invalidated.`;
+          recoveryMsg = `🔎 RECOVERY ANALYSIS for ${signal.marketSymbol.symbol}:\nPrevious ${signal.direction} setup failed. Current structure invalidated. Monitoring for new structural confirmation before re-entry. (No automatic revenge trade).`;
+        }
+      }
     }
 
     // 3. Take Profit Checks (if SL not hit)
-    if (!isSlHit && (prevStatus === 'ENTRY_REACHED' || prevStatus === 'ACTIVE' || prevStatus === 'TP1_HIT' || prevStatus === 'TP2_HIT')) {
+    if (!isSlHit && (prevStatus === 'ENTRY_REACHED' || prevStatus === 'ACTIVE' || prevStatus === 'TP1_HIT' || prevStatus === 'TP2_HIT' || prevStatus === 'BREAKEVEN')) {
       const isTp1 = isBuy ? currentPrice >= signal.tp1 : currentPrice <= signal.tp1;
       const isTp2 = isBuy ? currentPrice >= signal.tp2 : currentPrice <= signal.tp2;
       const isTp3 = isBuy ? currentPrice >= signal.tp3 : currentPrice <= signal.tp3;
@@ -101,16 +114,23 @@ export class SignalMonitoringWorker {
       }
     }
 
-    // 4. Signal Expiration Check (4h without entry)
+    // 4. Signal Expiration Checks
     const hoursSinceCreation = (Date.now() - new Date(signal.createdAt).getTime()) / (1000 * 3600);
-    if (prevStatus === 'SENT' && hoursSinceCreation > 4 && !isSlHit) {
+
+    // 4a. Pending setup expiration (4h without entry)
+    if (prevStatus === 'SENT' && hoursSinceCreation > 4 && !isSlHit && newStatus === prevStatus) {
       newStatus = 'EXPIRED';
       notificationMsg = `⚪ ${signal.marketSymbol.symbol} SIGNAL EXPIRED: Entry zone not reached within 4 hours.`;
     }
 
+    // 4b. Active trade expiration (24h max active trade duration)
+    if (hasReachedEntry && hoursSinceCreation > 24 && !isSlHit && newStatus === prevStatus) {
+      newStatus = 'EXPIRED';
+      notificationMsg = `⚪ ${signal.marketSymbol.symbol} SIGNAL CLOSED: Active 24-hour monitoring limit reached. Position auto-closed.`;
+    }
+
     // If state changed, verify this event hasn't already been emitted for this signal ID
     if (newStatus !== prevStatus) {
-      const monitoringRecord = signal.monitoring;
       if (
         (newStatus === 'ENTRY_REACHED' && monitoringRecord?.isNotifiedEntry) ||
         (newStatus === 'TP1_HIT' && monitoringRecord?.isNotifiedTp1) ||
@@ -130,8 +150,8 @@ export class SignalMonitoringWorker {
       }
 
       const isTerminal = ['TP3_HIT', 'SL_HIT', 'EXPIRED', 'INVALIDATED'].includes(newStatus);
-      const isWin = ['TP1_HIT', 'TP2_HIT', 'TP3_HIT'].includes(newStatus);
-      const isLoss = newStatus === 'SL_HIT';
+      const isWin = ['TP1_HIT', 'TP2_HIT', 'TP3_HIT'].includes(newStatus) || (newStatus === 'SL_HIT' && hasHitAnyTp);
+      const isLoss = newStatus === 'SL_HIT' && !hasHitAnyTp;
 
       await prisma.$transaction([
         prisma.signal.update({
@@ -139,7 +159,7 @@ export class SignalMonitoringWorker {
           data: {
             status: newStatus,
             closedAt: isTerminal ? new Date() : undefined,
-            result: isWin ? 'WIN' : isLoss ? 'LOSS' : newStatus === 'EXPIRED' ? 'EXPIRED' : undefined,
+            result: isWin ? 'WIN' : isLoss ? 'LOSS' : newStatus === 'EXPIRED' ? 'EXPIRED' : newStatus === 'INVALIDATED' ? 'INVALIDATED' : undefined,
           },
         }),
         prisma.signalEvent.create({
@@ -155,11 +175,11 @@ export class SignalMonitoringWorker {
           update: {
             currentPrice,
             lastCheckedAt: new Date(),
-            isNotifiedEntry: newStatus === 'ENTRY_REACHED' ? true : undefined,
-            isNotifiedTp1: newStatus === 'TP1_HIT' ? true : undefined,
-            isNotifiedTp2: newStatus === 'TP2_HIT' ? true : undefined,
-            isNotifiedTp3: newStatus === 'TP3_HIT' ? true : undefined,
-            isNotifiedSl: newStatus === 'SL_HIT' ? true : undefined,
+            isNotifiedEntry: newStatus === 'ENTRY_REACHED' || monitoringRecord?.isNotifiedEntry ? true : undefined,
+            isNotifiedTp1: newStatus === 'TP1_HIT' || monitoringRecord?.isNotifiedTp1 ? true : undefined,
+            isNotifiedTp2: newStatus === 'TP2_HIT' || monitoringRecord?.isNotifiedTp2 ? true : undefined,
+            isNotifiedTp3: newStatus === 'TP3_HIT' || monitoringRecord?.isNotifiedTp3 ? true : undefined,
+            isNotifiedSl: newStatus === 'SL_HIT' || monitoringRecord?.isNotifiedSl ? true : undefined,
           },
           create: {
             signalId: signal.id,
