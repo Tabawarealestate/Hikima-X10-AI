@@ -632,28 +632,56 @@ Click the button below to complete your payment via CryptoMus:`;
 
       const dbUser = await prisma.telegramUser.findUnique({
         where: { telegramId: BigInt(tgUser.id) },
-        include: { user: true },
+        include: { user: { include: { preferences: true } } },
       });
+
+      if (!dbUser) return ctx.reply('Please register first by entering your Access Code X10H.');
+
+      const isPremium = dbUser.user.accessType === 'PREMIUM';
+
+      // 1. Premium Authorization Check for Select All Strategies
+      if ((stratCode === 'SELECT_ALL_STRATEGIES' || stratCode === 'SELECT_ALL') && !isPremium) {
+        return ctx.reply('🔒 Select All Strategies is a Premium feature.\n\nUpgrade to Premium to let Hikima X10 AI analyze all available strategies and find the strongest eligible setup for your markets! Type /subscribe to upgrade.');
+      }
+
+      // 2. Premium Authorization Check for Quick Scalping
+      if (stratCode === 'QUICK_SCALPING' && !isPremium) {
+        return ctx.reply('🔒 PREMIUM ONLY: Quick Scalping strategy is available for Premium subscription users. Type /subscribe to upgrade.');
+      }
+
+      let newPref = stratCode;
+      if (stratCode === 'SELECT_ALL_STRATEGIES' || stratCode === 'SELECT_ALL') {
+        const currentPref = dbUser.user.preferences?.preferredStrategy;
+        newPref = currentPref === 'SELECT_ALL_STRATEGIES' ? 'SMC' : 'SELECT_ALL_STRATEGIES';
+      }
 
       if (dbUser) {
         await prisma.userPreference.upsert({
           where: { userId: dbUser.userId },
-          update: { preferredStrategy: stratCode },
-          create: { userId: dbUser.userId, preferredStrategy: stratCode },
+          update: { preferredStrategy: newPref },
+          create: { userId: dbUser.userId, preferredStrategy: newPref },
         });
 
-        const strat = await prisma.strategy.findFirst({ where: { code: stratCode } });
-        if (strat) {
-          await prisma.userStrategy.upsert({
-            where: { userId_strategyId: { userId: dbUser.userId, strategyId: strat.id } },
-            update: { isSelected: true },
-            create: { userId: dbUser.userId, strategyId: strat.id, isSelected: true },
-          });
+        if (newPref !== 'SELECT_ALL_STRATEGIES') {
+          const strat = await prisma.strategy.findFirst({ where: { code: newPref } });
+          if (strat) {
+            await prisma.userStrategy.upsert({
+              where: { userId_strategyId: { userId: dbUser.userId, strategyId: strat.id } },
+              update: { isSelected: true },
+              create: { userId: dbUser.userId, strategyId: strat.id, isSelected: true },
+            });
+          }
         }
       }
 
-      await ctx.answerCbQuery(`Selected Strategy: ${stratCode}`);
-      await this.cleanAndReply(ctx, `✅ Preferred Strategy updated to: ${stratCode}. Saved to your profile. AI scanner will only generate signals matching ${stratCode} for your account.`);
+      await ctx.answerCbQuery(`Selected Strategy: ${newPref}`);
+      if (newPref === 'SELECT_ALL_STRATEGIES') {
+        await this.cleanAndReply(ctx, '🔥 Select All Strategies Enabled!\n\nHikima X10 AI will now analyze all eligible Premium strategies (SMC, Alchemist, Trend Following, Breakout, Quick Scalping, AI Consensus) across your selected markets and timeframes.\n\nYou will receive the highest-ranked valid opportunities that satisfy your risk rules.');
+      } else if (stratCode === 'SELECT_ALL_STRATEGIES' || stratCode === 'SELECT_ALL') {
+        await this.cleanAndReply(ctx, '⚙️ Select All Strategies Disabled.\n\nReverted to manual strategy selection (SMC).');
+      } else {
+        await this.cleanAndReply(ctx, `✅ Preferred Strategy updated to: ${newPref}. Saved to your profile. AI scanner will only generate signals matching ${newPref} for your account.`);
+      }
     });
 
     // 11. Admin Commands
@@ -1027,7 +1055,15 @@ ${pairsStatusText}
   }
 
   private async renderStrategies(ctx: any) {
-    const text = `🧠 STRATEGY ENGINE SELECTION\n\nSelect your active strategy:`;
+    const tgUser = ctx.from;
+    const dbUser = await prisma.telegramUser.findUnique({
+      where: { telegramId: BigInt(tgUser.id) },
+      include: { user: { include: { preferences: true } } },
+    });
+
+    const isSelectAllOn = dbUser?.user.preferences?.preferredStrategy === 'SELECT_ALL_STRATEGIES';
+
+    const text = `🧠 STRATEGY ENGINE SELECTION\n\nSelect your active strategy or enable Select All Strategies mode:`;
     const keyboard = Markup.inlineKeyboard([
       [Markup.button.callback('🤖 AI Consensus', 'select_strat_AI_CONSENSUS')],
       [Markup.button.callback('⚡ Smart Money Concepts (SMC)', 'select_strat_SMC')],
@@ -1035,6 +1071,7 @@ ${pairsStatusText}
       [Markup.button.callback('📈 Trend Following', 'select_strat_TREND')],
       [Markup.button.callback('💥 Breakout Engine', 'select_strat_BREAKOUT')],
       [Markup.button.callback('⚡ Quick Scalping (🔒 Premium)', 'select_strat_QUICK_SCALPING')],
+      [Markup.button.callback(isSelectAllOn ? '🔥 Select All Strategies: ON' : '🔥 Select All Strategies (Premium)', 'select_strat_SELECT_ALL_STRATEGIES')],
     ]);
     await this.cleanAndReply(ctx, text, keyboard);
   }
@@ -1127,6 +1164,9 @@ ${pairsStatusText}
       const localTime = new Date(now.getTime() + tzOffsetHours * 3600 * 1000);
       const formattedTimeStr = `${localTime.toISOString().replace('T', ' ').slice(0, 16)} ${timezone}`;
 
+      const isSelectAllMode = signal.isSelectAllMode || false;
+      const modeLine = isSelectAllMode ? '\n🔥 Mode: Select All Strategies' : '';
+
       const formattedMessage = `━━━━━━━━━━━━━━━━━━━━
 🔥 HIKIMA X10 AI
 📊 TRADE SIGNAL
@@ -1135,7 +1175,7 @@ ${pairsStatusText}
 🪙 PAIR: ${symbol}
 ${directionEmoji}
 
-📌 Strategy: ${signal.strategy ? signal.strategy.name : signal.strategyName}
+📌 Strategy: ${signal.strategy ? signal.strategy.name : signal.strategyName}${modeLine}
 ⏱ Timeframe: ${signal.timeframe}
 🕐 Signal Time: ${formattedTimeStr}
 

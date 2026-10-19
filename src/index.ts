@@ -399,7 +399,7 @@ async function bootstrap() {
 
               // 3. User Selected Strategy Preference Filter
               const prefStrategy = tu.user.preferences?.preferredStrategy;
-              if (prefStrategy && prefStrategy !== 'AI_CONSENSUS' && prefStrategy !== 'ALL') {
+              if (prefStrategy && prefStrategy !== 'AI_CONSENSUS' && prefStrategy !== 'ALL' && prefStrategy !== 'SELECT_ALL_STRATEGIES' && prefStrategy !== 'SELECT_ALL') {
                 const stratCodeUpper = dbStrategy.code.toUpperCase();
                 const prefUpper = prefStrategy.toUpperCase();
                 if (!stratCodeUpper.includes(prefUpper) && !dbStrategy.name.toUpperCase().includes(prefUpper)) {
@@ -429,12 +429,14 @@ async function bootstrap() {
               if (currentDailyCount < quota) {
                 console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=ACCEPT`);
                 const userTz = tu.user.preferences?.timezone || 'UTC';
+                const isSelectAllMode = prefStrategy === 'SELECT_ALL_STRATEGIES' || prefStrategy === 'SELECT_ALL';
                 const sent = await botService.sendFormattedSignal(
                   String(tu.telegramId),
                   {
                     ...newSignal,
                     marketSymbol: sym,
                     strategyName: dbStrategy.name,
+                    isSelectAllMode,
                   },
                   userTz
                 );
