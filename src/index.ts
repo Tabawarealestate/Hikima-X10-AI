@@ -330,7 +330,7 @@ async function bootstrap() {
                 continue;
               }
 
-              // PER-SYMBOL ACTIVE SIGNAL LIMIT: Max 1 active open signal per symbol per user
+              // SINGLE-SIGNAL SEQUENTIAL LOCK CHECK: Check if user currently has an active unclosed signal in progress
               const recentUserNotifs = await prisma.notification.findMany({
                 where: { userId: tu.userId },
                 orderBy: { createdAt: 'desc' },
@@ -347,25 +347,24 @@ async function bootstrap() {
                 if (
                   activeUserSignal &&
                   !activeUserSignal.closedAt &&
-                  ['SENT', 'ACTIVE', 'ENTRY_REACHED'].includes(activeUserSignal.status)
+                  ['SENT', 'ACTIVE', 'ENTRY_REACHED', 'TP1_HIT', 'TP2_HIT', 'SL_MOVED_TO_ENTRY', 'BREAKEVEN'].includes(activeUserSignal.status)
                 ) {
                   activeTotalCount++;
                   if (activeUserSignal.symbolId === sym.id) {
-                    console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=ACTIVE_SIGNAL_FOR_SYMBOL_IN_PROGRESS activeSignalId=${activeUserSignal.id}`);
                     activeSymbolSignalExists = true;
-                    break;
                   }
                 }
               }
 
               if (activeSymbolSignalExists) {
+                console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=ACTIVE_SIGNAL_FOR_SYMBOL_IN_PROGRESS`);
                 continue; // User already has an active pending signal on this exact symbol
               }
 
-              // Overall concurrent active signal cap (Free: 1, Premium: 3)
-              const maxConcurrentActive = isPremium ? 3 : 1;
-              if (activeTotalCount >= maxConcurrentActive) {
-                console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=MAX_CONCURRENT_ACTIVE_SIGNALS_REACHED activeCount=${activeTotalCount}`);
+              // Default Sequential Signal Mode: 1 Active Signal Opportunity at a time per user
+              const sequentialSignalMode = true;
+              if (sequentialSignalMode && activeTotalCount >= 1) {
+                console.log(`[SignalEngine] user=${tu.username || tu.telegramId} symbol=${sym.symbol} strategy=${dbStrategy.code} decision=REJECT reason=ACTIVE_SIGNAL_LOCK_IN_PROGRESS activeCount=${activeTotalCount}`);
                 continue;
               }
 

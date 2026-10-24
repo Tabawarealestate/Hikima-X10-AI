@@ -3,6 +3,7 @@ import { config } from '../../config';
 import { prisma } from '../../database';
 import { CryptoMusService } from '../../services/subscription/cryptomus.service';
 import { TradingAIAssistantService } from '../../services/ai-assistant/trading-assistant.service';
+import { IslamicContentService } from '../../services/islamic/islamic-content.service';
 import { getText } from '../../packages/shared/i18n';
 
 export const HIKIMA_SIGNAL_ENGINE_VERSION = '2.2.0-standalone';
@@ -13,6 +14,7 @@ export class TelegramBotService {
   public bot: Telegraf;
   private cryptomusService = new CryptoMusService();
   private aiAssistantService = new TradingAIAssistantService();
+  private islamicService = new IslamicContentService();
   private channelUsername = '@hikimaaipalace';
   private channelUrl = 'https://t.me/hikimaaipalace';
 
@@ -275,14 +277,56 @@ export class TelegramBotService {
         });
       }
 
-      const statusText = currentVal ? '🟢 ON (Friday & Ramadan Supplication Reminders Enabled)' : '🔴 OFF (No Religious Messages)';
+      const statusText = currentVal ? '🟢 ON' : '🔴 OFF';
       await ctx.answerCbQuery(`Muslim Activities: ${currentVal ? 'ON' : 'OFF'}`);
       const lang = await this.getUserLang(tgUser.id);
+
+      const text = `🕌 MUSLIM ACTIVITIES & TRUSTED ISLAMIC REMINDERS:\n\nSetting: ${statusText}\nWhen ON, you receive authentic Friday Salawat reminders, Ramadan Suhoor & Iftar du'as (Sunan Abi Dawud 2357), and verified Adhkar. Trading signals operate independently.`;
+
       await this.cleanAndReply(
         ctx,
-        `🌙 Muslim Activities Setting: ${statusText}\n\nWhen ON, you receive authentic Friday Salawat reminders, Ramadan Suhoor & Iftar du'as (Sunan Abi Dawud 2357), and Eid greetings. Market notifications remain fully active.`,
-        this.getBottomReplyKeyboard(lang)
+        text,
+        Markup.inlineKeyboard([
+          [Markup.button.callback('📖 Hadith of the Day', 'islamic_hadith'), Markup.button.callback('🤲 Daily Du\'a', 'islamic_dua')],
+          [Markup.button.callback('🌅 Morning Adhkar', 'islamic_morning_adhkar'), Markup.button.callback('🌙 Evening Adhkar', 'islamic_evening_adhkar')],
+          [Markup.button.callback('🕋 Hajj & Umrah Guide', 'islamic_hajj_umrah')],
+          [Markup.button.callback(`🕌 Toggle Muslim Activities (${statusText})`, 'toggle_muslim_activities')],
+        ])
       );
+    });
+
+    this.bot.action('islamic_hadith', async (ctx) => {
+      await ctx.answerCbQuery('Hadith of the Day');
+      const item = this.islamicService.getDailyHadith();
+      const text = `📖 HADITH OF THE DAY\n━━━━━━━━━━━━━━━━━━\n\n${item.arabicText}\n\nTransliteration:\n${item.transliteration}\n\nTranslation:\n"${item.translation}"\n\nSource: ${item.sourceCollection} (${item.sourceReference})\nGrading: ${item.authenticityStatus}`;
+      await this.cleanAndReply(ctx, text, this.getBottomReplyKeyboard(await this.getUserLang(ctx.from.id)));
+    });
+
+    this.bot.action('islamic_dua', async (ctx) => {
+      await ctx.answerCbQuery('Daily Du\'a');
+      const item = this.islamicService.getDailyDua();
+      const text = `🤲 DAILY VERIFIED DU'A\n━━━━━━━━━━━━━━━━━━\n\n${item.arabicText}\n\nTransliteration:\n${item.transliteration}\n\nTranslation:\n"${item.translation}"\n\nSource: ${item.sourceCollection} (${item.sourceReference})\nGrading: ${item.authenticityStatus}`;
+      await this.cleanAndReply(ctx, text, this.getBottomReplyKeyboard(await this.getUserLang(ctx.from.id)));
+    });
+
+    this.bot.action('islamic_morning_adhkar', async (ctx) => {
+      await ctx.answerCbQuery('Morning Adhkar');
+      const item = this.islamicService.getMorningAdhkar();
+      const text = `🌅 MORNING ADHKAR\n━━━━━━━━━━━━━━━━━━\n\n${item.arabicText}\n\nTransliteration:\n${item.transliteration}\n\nTranslation:\n"${item.translation}"\n\nSource: ${item.sourceCollection} (${item.sourceReference})\nGrading: ${item.authenticityStatus}`;
+      await this.cleanAndReply(ctx, text, this.getBottomReplyKeyboard(await this.getUserLang(ctx.from.id)));
+    });
+
+    this.bot.action('islamic_evening_adhkar', async (ctx) => {
+      await ctx.answerCbQuery('Evening Adhkar');
+      const item = this.islamicService.getEveningAdhkar();
+      const text = `🌙 EVENING ADHKAR\n━━━━━━━━━━━━━━━━━━\n\n${item.arabicText}\n\nTransliteration:\n${item.transliteration}\n\nTranslation:\n"${item.translation}"\n\nSource: ${item.sourceCollection} (${item.sourceReference})\nGrading: ${item.authenticityStatus}`;
+      await this.cleanAndReply(ctx, text, this.getBottomReplyKeyboard(await this.getUserLang(ctx.from.id)));
+    });
+
+    this.bot.action('islamic_hajj_umrah', async (ctx) => {
+      await ctx.answerCbQuery('Hajj & Umrah Guide');
+      const text = this.islamicService.getHajjUmrahGuide();
+      await this.cleanAndReply(ctx, text, this.getBottomReplyKeyboard(await this.getUserLang(ctx.from.id)));
     });
 
     this.bot.action('edit_timeframes', async (ctx) => {
@@ -1088,14 +1132,55 @@ ${pairsStatusText}
 
   private async renderPerformance(ctx: any) {
     const lang = await this.getUserLang(ctx.from.id);
-    const stats = await prisma.signalStatistic.findFirst();
-    const total = stats ? stats.totalSignals : 0;
-    const wins = stats ? stats.totalWins : 0;
-    const losses = stats ? stats.totalLosses : 0;
-    const closedCount = wins + losses;
-    const winRate = closedCount > 0 ? ((wins / closedCount) * 100).toFixed(1) : 'N/A';
 
-    await this.cleanAndReply(ctx, `📊 PLATFORM PERFORMANCE:\n\nTotal Completed Signals: ${total}\nWins: ${wins}\nLosses: ${losses}\nWin Rate: ${winRate}%\n\nPerformance metrics calculated strictly from verified database historical results.`, this.getBottomReplyKeyboard(lang));
+    const totalSignals = await prisma.signal.count();
+
+    const wins = await prisma.signal.count({
+      where: { result: 'WIN' },
+    });
+
+    const losses = await prisma.signal.count({
+      where: { result: 'LOSS' },
+    });
+
+    const breakeven = await prisma.signal.count({
+      where: { result: 'BREAKEVEN' },
+    });
+
+    const expiredBeforeEntry = await prisma.signal.count({
+      where: { result: 'EXPIRED' },
+    });
+
+    const invalidatedBeforeEntry = await prisma.signal.count({
+      where: { result: 'INVALIDATED' },
+    });
+
+    const unresolvedActive = await prisma.signal.count({
+      where: { closedAt: null },
+    });
+
+    const enteredTrades = wins + losses + breakeven;
+    const winRate = enteredTrades > 0 ? ((wins / enteredTrades) * 100).toFixed(1) : 'N/A';
+
+    const text = `📊 PLATFORM FORENSIC PERFORMANCE DASHBOARD
+━━━━━━━━━━━━━━━━━━
+Total Signal Opportunities: ${totalSignals}
+
+📈 ENTERED TRADES:
+• Total Entered Trades: ${enteredTrades}
+• Wins: ${wins}
+• Losses: ${losses}
+• Breakeven: ${breakeven}
+• Win Rate (Entered Trades): ${winRate}%
+
+⚪ NON-TRADE OUTCOMES:
+• Expired Before Entry: ${expiredBeforeEntry}
+• Invalidated Before Entry: ${invalidatedBeforeEntry}
+• Unresolved Active: ${unresolvedActive}
+
+ℹ️ Note: Performance statistics are audited strictly from verified database historical results. Unentered signals (expired/invalidated) are categorized separately and do not distort trade win rates.`;
+
+    await this.cleanAndReply(ctx, text, this.getBottomReplyKeyboard(lang));
   }
 
   private async renderSettings(ctx: any) {
