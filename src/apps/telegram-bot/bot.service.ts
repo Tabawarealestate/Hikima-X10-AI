@@ -561,8 +561,16 @@ export class TelegramBotService {
       return ctx.reply(answer);
     });
 
+    // 4c. Muslim Activities Command (/muslim)
+    this.bot.command('muslim', async (ctx) => {
+      const tgUser = ctx.from;
+      const isMember = await this.checkChannelMembership(tgUser.id);
+      if (!isMember) return this.renderChannelRequiredScreen(ctx, tgUser.username ? `@${tgUser.username}` : tgUser.first_name);
+      return this.renderMuslimActivitiesMenu(ctx);
+    });
+
     // 5. Commands
-    this.bot.command(['menu', 'signals', 'markets', 'strategies', 'settings', 'performance', 'subscription', 'subscribe', 'help', 'support', 'status', 'scan', 'stop', 'ask'], async (ctx) => {
+    this.bot.command(['menu', 'signals', 'markets', 'strategies', 'settings', 'performance', 'subscription', 'subscribe', 'help', 'support', 'status', 'scan', 'stop', 'ask', 'muslim'], async (ctx) => {
       const tgUser = ctx.from;
       const isMember = await this.checkChannelMembership(tgUser.id);
       if (!isMember) return this.renderChannelRequiredScreen(ctx, tgUser.username ? `@${tgUser.username}` : tgUser.first_name);
@@ -1247,6 +1255,31 @@ Total Signal Opportunities: ${totalSignals}
 ℹ️ Note: Performance statistics are audited strictly from verified database historical results. Unentered signals (expired/invalidated) are categorized separately and do not distort trade win rates.`;
 
     await this.cleanAndReply(ctx, text, this.getBottomReplyKeyboard(lang));
+  }
+
+  private async renderMuslimActivitiesMenu(ctx: any) {
+    const tgUser = ctx.from;
+    const dbUser = await prisma.telegramUser.findUnique({
+      where: { telegramId: BigInt(tgUser.id) },
+      include: { user: { include: { preferences: true } } },
+    });
+
+    const isMuslimOn = dbUser?.user.preferences?.muslimActivities || false;
+    const statusText = isMuslimOn ? '🟢 ON' : '🔴 OFF';
+
+    const text = `🕌 MUSLIM ACTIVITIES & TRUSTED ISLAMIC REMINDERS:\n\nSetting: ${statusText}\nWhen ON, you receive authentic Friday Salawat reminders, daily prayer times, Ramadan Suhoor & Iftar du'as (Sunan Abi Dawud 2357), and verified Adhkar. Trading signals operate independently.`;
+
+    await this.cleanAndReply(
+      ctx,
+      text,
+      Markup.inlineKeyboard([
+        [Markup.button.callback('📿 Prayer Times', 'islamic_prayer_times'), Markup.button.callback('📖 Hadith of the Day', 'islamic_hadith')],
+        [Markup.button.callback('🤲 Daily Du\'a', 'islamic_dua'), Markup.button.callback('🕌 Friday Jumu\'ah', 'islamic_jumuah')],
+        [Markup.button.callback('🌅 Morning Adhkar', 'islamic_morning_adhkar'), Markup.button.callback('🌙 Evening Adhkar', 'islamic_evening_adhkar')],
+        [Markup.button.callback('🕋 Hajj & Umrah Guide', 'islamic_hajj_umrah')],
+        [Markup.button.callback(`🕌 Toggle Muslim Activities (${statusText})`, 'toggle_muslim_activities')],
+      ])
+    );
   }
 
   private async renderSettings(ctx: any) {
