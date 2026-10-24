@@ -42,29 +42,75 @@ export class PrayerTimeService {
     const city = this.getCity(cityName);
     const dateStr = date.toISOString().split('T')[0];
 
-    // Astronomical Solar Declination & Solar Noon Equations
-    const dayOfYear = Math.floor((date.getTime() - new Date(date.getFullYear(), 0, 0).getTime()) / 86400000);
-    const declination = 23.45 * Math.sin(((284 + dayOfYear) * Math.PI) / 180);
-    
-    // Standard Noon Calculation (UTC offset approximation)
-    const solarNoonHour = 12 - city.lng / 15;
-    const noonLocal = (solarNoonHour + 3) % 24; // Standardized Saudi/East GMT+3 reference
+    const toRad = (d: number) => (d * Math.PI) / 180;
+    const toDeg = (r: number) => (r * 180) / Math.PI;
 
-    const formatHour = (h: number) => {
-      const hours = Math.floor(h) % 24;
-      const mins = Math.floor((h - Math.floor(h)) * 60);
+    // Day of Year
+    const start = new Date(date.getFullYear(), 0, 0);
+    const diff = date.getTime() - start.getTime();
+    const N = Math.floor(diff / (1000 * 60 * 60 * 24));
+
+    // Solar Declination (degrees) & Equation of Time (minutes)
+    const B = (360 * (N - 81)) / 365;
+    const declination = 23.45 * Math.sin(toRad(B));
+    const EoT = 9.87 * Math.sin(toRad(2 * B)) - 7.53 * Math.cos(toRad(B)) - 1.5 * Math.sin(toRad(B));
+
+    // Solar Noon (Local Standard Time)
+    // Estimate UTC Offset from city longitude
+    const utcOffset = Math.round(city.lng / 15);
+    const solarNoonHours = 12 + (utcOffset * 15 - city.lng) / 15 - EoT / 60;
+
+    // Sun Hour Angle Function for Zenith Angle alpha (degrees)
+    const calculateHourAngle = (angleDeg: number): number => {
+      const latRad = toRad(city.lat);
+      const decRad = toRad(declination);
+      const cosH = (Math.cos(toRad(angleDeg)) - Math.sin(latRad) * Math.sin(decRad)) / (Math.cos(latRad) * Math.cos(decRad));
+      
+      if (cosH > 1) return 0; // Sun never reaches angle (polar night)
+      if (cosH < -1) return 180; // Sun never goes below angle (polar day)
+      return toDeg(Math.acos(cosH));
+    };
+
+    // 1. Fajr: Sun 18 degrees below horizon (Zenith 108 deg)
+    const fajrH = calculateHourAngle(108);
+    const fajrHour = solarNoonHours - fajrH / 15;
+
+    // 2. Sunrise: Sun 0.833 degrees below horizon (Zenith 90.833 deg)
+    const sunriseH = calculateHourAngle(90.833);
+    const sunriseHour = solarNoonHours - sunriseH / 15;
+
+    // 3. Dhuhr: Solar Noon
+    const dhuhrHour = solarNoonHours + 2 / 60;
+
+    // 4. Asr: Shadow Factor 1 (Shafi'i/Hanbali/Maliki standard)
+    const phi = Math.abs(city.lat - declination);
+    const asrAngleDeg = 90 - toDeg(Math.atan(1 + Math.tan(toRad(phi))));
+    const asrH = calculateHourAngle(asrAngleDeg);
+    const asrHour = solarNoonHours + asrH / 15;
+
+    // 5. Maghrib: Sunset (Zenith 90.833 deg)
+    const maghribHour = solarNoonHours + sunriseH / 15 + 2 / 60;
+
+    // 6. Isha: Sun 17 degrees below horizon (Zenith 107 deg)
+    const ishaH = calculateHourAngle(107);
+    const ishaHour = solarNoonHours + ishaH / 15;
+
+    const formatTime = (h: number) => {
+      const posH = (h + 24) % 24;
+      const hours = Math.floor(posH);
+      const mins = Math.floor((posH - hours) * 60);
       return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
     };
 
     return {
       date: dateStr,
       city: `${city.name}, ${city.country}`,
-      fajr: formatHour(noonLocal - 6.8),
-      sunrise: formatHour(noonLocal - 5.5),
-      dhuhr: formatHour(noonLocal + 0.2),
-      asr: formatHour(noonLocal + 3.4),
-      maghrib: formatHour(noonLocal + 5.8),
-      isha: formatHour(noonLocal + 7.2),
+      fajr: formatTime(fajrHour),
+      sunrise: formatTime(sunriseHour),
+      dhuhr: formatTime(dhuhrHour),
+      asr: formatTime(asrHour),
+      maghrib: formatTime(maghribHour),
+      isha: formatTime(ishaHour),
     };
   }
 }

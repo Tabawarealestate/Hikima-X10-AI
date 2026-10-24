@@ -8,6 +8,7 @@ import { EnsembleEngine } from './services/strategy-engine/ensemble.engine';
 import { BreakoutStrategy } from './services/strategy-engine/breakout.strategy';
 import { RiskEngine } from './services/signal-engine/risk.engine';
 import { SignalDeduplicationService } from './services/signal-engine/deduplication.service';
+import { IslamicSchedulerWorker } from './services/islamic/islamic-scheduler.worker';
 import { config } from './config';
 import { prisma, seedInitialData } from './database';
 
@@ -478,6 +479,30 @@ async function bootstrap() {
   // Launch background tasks
   scheduleMonitoring();
   scheduleScanner();
+
+  // 7. Start Background Islamic Scheduler Worker Loop
+  const islamicSchedulerWorker = new IslamicSchedulerWorker();
+  let islamicTimeout: NodeJS.Timeout | null = null;
+
+  const scheduleIslamicReminders = async () => {
+    if (!isRunning) return;
+    try {
+      if (botService) {
+        await islamicSchedulerWorker.processDailyReminders(async (tgId, msg) => {
+          await botService!.bot.telegram.sendMessage(tgId, msg);
+          return true;
+        });
+      }
+    } catch (err) {
+      console.error('⚠️ [ISLAMIC SCHEDULER] Background worker error:', err);
+    } finally {
+      if (isRunning) {
+        islamicTimeout = setTimeout(scheduleIslamicReminders, 15 * 60 * 1000);
+      }
+    }
+  };
+
+  scheduleIslamicReminders();
 }
 
 if (process.env.NODE_ENV !== 'test') {
