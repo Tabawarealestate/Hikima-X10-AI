@@ -4,6 +4,7 @@ import { prisma } from '../../database';
 import { CryptoMusService } from '../../services/subscription/cryptomus.service';
 import { TradingAIAssistantService } from '../../services/ai-assistant/trading-assistant.service';
 import { IslamicContentService } from '../../services/islamic/islamic-content.service';
+import { PrayerTimeService } from '../../services/islamic/prayer-time.service';
 import { getText } from '../../packages/shared/i18n';
 
 export const HIKIMA_SIGNAL_ENGINE_VERSION = '2.2.0-standalone';
@@ -15,6 +16,7 @@ export class TelegramBotService {
   private cryptomusService = new CryptoMusService();
   private aiAssistantService = new TradingAIAssistantService();
   private islamicService = new IslamicContentService();
+  private prayerTimeService = new PrayerTimeService();
   private channelUsername = '@hikimaaipalace';
   private channelUrl = 'https://t.me/hikimaaipalace';
 
@@ -281,18 +283,82 @@ export class TelegramBotService {
       await ctx.answerCbQuery(`Muslim Activities: ${currentVal ? 'ON' : 'OFF'}`);
       const lang = await this.getUserLang(tgUser.id);
 
-      const text = `🕌 MUSLIM ACTIVITIES & TRUSTED ISLAMIC REMINDERS:\n\nSetting: ${statusText}\nWhen ON, you receive authentic Friday Salawat reminders, Ramadan Suhoor & Iftar du'as (Sunan Abi Dawud 2357), and verified Adhkar. Trading signals operate independently.`;
+      const text = `🕌 MUSLIM ACTIVITIES & TRUSTED ISLAMIC REMINDERS:\n\nSetting: ${statusText}\nWhen ON, you receive authentic Friday Salawat reminders, daily prayer times, Ramadan Suhoor & Iftar du'as (Sunan Abi Dawud 2357), and verified Adhkar. Trading signals operate independently.`;
 
       await this.cleanAndReply(
         ctx,
         text,
         Markup.inlineKeyboard([
-          [Markup.button.callback('📖 Hadith of the Day', 'islamic_hadith'), Markup.button.callback('🤲 Daily Du\'a', 'islamic_dua')],
+          [Markup.button.callback('📿 Prayer Times', 'islamic_prayer_times'), Markup.button.callback('📖 Hadith of the Day', 'islamic_hadith')],
+          [Markup.button.callback('🤲 Daily Du\'a', 'islamic_dua'), Markup.button.callback('🕌 Friday Jumu\'ah', 'islamic_jumuah')],
           [Markup.button.callback('🌅 Morning Adhkar', 'islamic_morning_adhkar'), Markup.button.callback('🌙 Evening Adhkar', 'islamic_evening_adhkar')],
           [Markup.button.callback('🕋 Hajj & Umrah Guide', 'islamic_hajj_umrah')],
           [Markup.button.callback(`🕌 Toggle Muslim Activities (${statusText})`, 'toggle_muslim_activities')],
         ])
       );
+    });
+
+    this.bot.action('islamic_prayer_times', async (ctx) => {
+      await ctx.answerCbQuery('Prayer Times');
+      const tgUser = ctx.from;
+      const dbUser = await prisma.telegramUser.findUnique({
+        where: { telegramId: BigInt(tgUser.id) },
+        include: { user: { include: { preferences: true } } },
+      });
+
+      const userCity = dbUser?.user.preferences?.timezone?.split('/')[1] || 'Mecca';
+      const pt = this.prayerTimeService.calculatePrayerTimes(userCity);
+
+      const text = `🕌 TODAY'S PRAYER TIMES\n━━━━━━━━━━━━━━━━━━\n\n🌅 Fajr       ${pt.fajr}\n☀️ Dhuhr      ${pt.dhuhr}\n🌤️ Asr        ${pt.asr}\n<ctrl42> Maghrib    ${pt.maghrib}\n🌙 Isha       ${pt.isha}\n\n📍 Location: ${pt.city}\n📅 Date: ${pt.date}`;
+
+      await this.cleanAndReply(
+        ctx,
+        text,
+        Markup.inlineKeyboard([
+          [Markup.button.callback('🏙️ Select City', 'edit_city')],
+          [Markup.button.callback('🕌 Jumu\'ah Reminder', 'islamic_jumuah')],
+        ])
+      );
+    });
+
+    this.bot.action('edit_city', async (ctx) => {
+      await ctx.answerCbQuery('Select City');
+      const cities = this.prayerTimeService.supportedCities;
+      const buttons = cities.map((c) => Markup.button.callback(c.name, `set_city_${c.name}`));
+      const grid = [];
+      for (let i = 0; i < buttons.length; i += 2) {
+        grid.push(buttons.slice(i, i + 2));
+      }
+      await this.cleanAndReply(ctx, '📍 Select Your City for Accurate Prayer Times:', Markup.inlineKeyboard(grid));
+    });
+
+    this.bot.action(/^set_city_(.+)$/, async (ctx) => {
+      const cityName = ctx.match[1];
+      const tgUser = ctx.from;
+      const dbUser = await prisma.telegramUser.findUnique({
+        where: { telegramId: BigInt(tgUser.id) },
+        include: { user: true },
+      });
+
+      if (dbUser) {
+        await prisma.userPreference.upsert({
+          where: { userId: dbUser.userId },
+          update: { timezone: `Asia/${cityName}` },
+          create: { userId: dbUser.userId, timezone: `Asia/${cityName}` },
+        });
+      }
+
+      await ctx.answerCbQuery(`City set to ${cityName}`);
+      const pt = this.prayerTimeService.calculatePrayerTimes(cityName);
+      const text = `✅ Location updated to ${cityName}!\n\n🕌 TODAY'S PRAYER TIMES\n━━━━━━━━━━━━━━━━━━\n\n🌅 Fajr       ${pt.fajr}\n☀️ Dhuhr      ${pt.dhuhr}\n🌤️ Asr        ${pt.asr}\n🌇 Maghrib    ${pt.maghrib}\n🌙 Isha       ${pt.isha}\n\n📍 Location: ${pt.city}`;
+      await this.cleanAndReply(ctx, text, this.getBottomReplyKeyboard(await this.getUserLang(tgUser.id)));
+    });
+
+    this.bot.action('islamic_jumuah', async (ctx) => {
+      await ctx.answerCbQuery('Jumu\'ah Reminder');
+      const item = this.islamicService.getJumuahReminder();
+      const text = `🕌 JUMU'AH MUBARAK & SALAWAT REMINDER\n━━━━━━━━━━━━━━━━━━\n\n${item.arabicText}\n\nTransliteration:\n${item.transliteration}\n\nTranslation:\n"${item.translation}"\n\nSource: ${item.sourceCollection} (${item.sourceReference})`;
+      await this.cleanAndReply(ctx, text, this.getBottomReplyKeyboard(await this.getUserLang(ctx.from.id)));
     });
 
     this.bot.action('islamic_hadith', async (ctx) => {

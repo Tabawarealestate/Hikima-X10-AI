@@ -1,13 +1,14 @@
 export interface IslamicContentItem {
   id: string;
-  type: 'HADITH' | 'DUA' | 'ADHKAR' | 'PRAYER' | 'HAJJ_UMRAH' | 'RAMADAN';
+  type: 'HADITH' | 'DUA' | 'ADHKAR' | 'PRAYER' | 'HAJJ_UMRAH' | 'RAMADAN' | 'JUMUAH';
   title: string;
   arabicText: string;
   transliteration?: string;
   translation: string;
   sourceCollection: string;
   sourceReference: string;
-  authenticityStatus: 'SAHIH' | 'HASAN' | 'VERIFIED';
+  authenticityStatus: 'SAHIH' | 'HASAN' | 'VERIFIED' | 'QURANIC';
+  topic?: string;
 }
 
 export class IslamicContentService {
@@ -22,17 +23,19 @@ export class IslamicContentService {
       sourceCollection: 'Sahih al-Bukhari',
       sourceReference: 'Book 1, Hadith 1',
       authenticityStatus: 'SAHIH',
+      topic: 'Faith & Intention',
     },
     {
       id: 'h2',
       type: 'HADITH',
       title: 'Truthfulness and Honesty',
       arabicText: 'عَلَيْكُمْ بِالصِّدْقِ فَإِنَّ الصِّدْقَ يَهْدِي إِلَى الْبِرِّ وَإِنَّ الْبِرَّ يَهْدِي إِلَى الْجَنَّةِ',
-      transliteration: " 'Alaykum bis-sidqi fa-innas-sidqa yahdi ilal-birri wa innal-birra yahdi ilal-jannah",
+      transliteration: "'Alaykum bis-sidqi fa-innas-sidqa yahdi ilal-birri wa innal-birra yahdi ilal-jannah",
       translation: 'You must be truthful, for truthfulness leads to righteousness, and righteousness leads to Paradise.',
       sourceCollection: 'Sahih Muslim',
       sourceReference: 'Book 45, Hadith 134',
       authenticityStatus: 'SAHIH',
+      topic: 'Character & Honesty',
     },
     {
       id: 'h3',
@@ -44,6 +47,19 @@ export class IslamicContentService {
       sourceCollection: 'Sahih al-Bukhari',
       sourceReference: 'Book 78, Hadith 165',
       authenticityStatus: 'SAHIH',
+      topic: 'Character & Speech',
+    },
+    {
+      id: 'h4',
+      type: 'HADITH',
+      title: 'Mercy to Creation',
+      arabicText: 'الرَّاحِمُونَ يَرْحَمُهُمُ الرَّحْمَنُ ارْحَمُوا مَنْ فِي الأَرْضِ يَرْحَمْكُمْ مَنْ فِي السَّمَاءِ',
+      transliteration: "Ar-rahimuna yarhamuhumur-Rahman, irhamu man fil-ardi yarhamkum man fis-sama'",
+      translation: 'The merciful are shown mercy by the Most Merciful. Be merciful to those on earth, and the One in heaven will show mercy to you.',
+      sourceCollection: 'Jami\' at-Tirmidhi',
+      sourceReference: 'Hadith 1924',
+      authenticityStatus: 'SAHIH',
+      topic: 'Compassion & Mercy',
     },
   ];
 
@@ -51,35 +67,50 @@ export class IslamicContentService {
     {
       id: 'd1',
       type: 'DUA',
-      title: "Iftar Supplication (Break Fasting)",
+      title: 'Qur\'anic Supplication — Good in Both Worlds',
+      arabicText: 'رَبَّنَا آتِنَا فِي الدُّنْيَا حَسَنَةً وَفِي الآخِرَةِ حَسَنَةً وَقِنَا عَذَابَ النَّارِ',
+      transliteration: "Rabbana atina fid-dunya hasanatan wa fil-akhirati hasanatan wa qina 'adhaban-nar",
+      translation: 'Our Lord, give us in this world that which is good and in the Hereafter that which is good, and protect us from the punishment of the Fire.',
+      sourceCollection: 'Holy Qur\'an',
+      sourceReference: 'Surah Al-Baqarah (2:201)',
+      authenticityStatus: 'QURANIC',
+      topic: 'General Wellbeing & Protection',
+    },
+    {
+      id: 'd2',
+      type: 'DUA',
+      title: 'Qur\'anic Supplication — Seeking Forgiveness & Steadfastness',
+      arabicText: 'رَبَّنَا لَا تُزِغْ قُلُوبَنَا بَعْدَ إِذْ هَدَيْتَنَا وَهَبْ لَنَا مِنْ لَدُنْكَ رَحْمَةً إِنَّكَ أَنْتَ الْوَهَّابُ',
+      transliteration: "Rabbana la tuzigh qulubana ba'da idh hadaytana wa hab lana min ladunka rahmatan innaka antal-Wahhab",
+      translation: 'Our Lord, let not our hearts swerve after You have guided us and grant us from Yourself mercy. Indeed, You are the Bestower.',
+      sourceCollection: 'Holy Qur\'an',
+      sourceReference: 'Surah Ali \'Imran (3:8)',
+      authenticityStatus: 'QURANIC',
+      topic: 'Guidance & Steadfastness',
+    },
+    {
+      id: 'd3',
+      type: 'DUA',
+      title: 'Iftar Supplication (Break Fasting)',
       arabicText: 'ذَهَبَ الظَّمَأُ وَابْتَلَّتِ الْعُرُوقُ وَثَبَتَ الأَجْرُ إِنْ شَاءَ اللَّهُ',
       transliteration: "Dhahaba adh-dhama'u, wabtallatil-'uruqu, wa thabatal-ajru in sha' Allah",
       translation: 'The thirst is gone, the veins are moistened, and the reward is confirmed, if Allah wills.',
       sourceCollection: 'Sunan Abi Dawud',
       sourceReference: 'Hadith 2357',
       authenticityStatus: 'HASAN',
+      topic: 'Fasting & Iftar',
     },
     {
-      id: 'd2',
+      id: 'd4',
       type: 'DUA',
-      title: 'Seeking Beneficial Knowledge and Provision',
+      title: 'Seeking Beneficial Knowledge and Wholesome Provision',
       arabicText: 'اللَّهُمَّ إِنِّي أَسْأَلُكَ عِلْمًا نَافِعًا وَرِزْقًا طَيِّبًا وَعَمَلاً مُتَقَبَّلاً',
       transliteration: "Allahumma inni as'aluka 'ilman nafi'an, wa rizqan tayyiban, wa 'amalan mutaqabbala",
       translation: 'O Allah, I ask You for beneficial knowledge, wholesome provision, and acceptable deeds.',
       sourceCollection: 'Sunan Ibn Majah',
       sourceReference: 'Book 5, Hadith 925',
       authenticityStatus: 'SAHIH',
-    },
-    {
-      id: 'd3',
-      type: 'DUA',
-      title: 'Seeking Guidance and Steadfastness',
-      arabicText: 'يَا مُقَلِّبَ الْقُلُوبِ ثَبِّتْ قَلْبِي عَلَى دِينِكَ',
-      transliteration: 'Ya Muqallibal-qulubi thabbit qalbi \'ala dinik',
-      translation: 'O Turner of the hearts, make my heart steadfast upon Your religion.',
-      sourceCollection: 'Jami\' at-Tirmidhi',
-      sourceReference: 'Hadith 2140',
-      authenticityStatus: 'SAHIH',
+      topic: 'Provision & Knowledge',
     },
   ];
 
@@ -94,6 +125,7 @@ export class IslamicContentService {
       sourceCollection: 'Sahih Muslim',
       sourceReference: 'Hadith 2723',
       authenticityStatus: 'SAHIH',
+      topic: 'Morning Dhikr',
     },
   ];
 
@@ -108,28 +140,44 @@ export class IslamicContentService {
       sourceCollection: 'Sahih Muslim',
       sourceReference: 'Hadith 2723',
       authenticityStatus: 'SAHIH',
+      topic: 'Evening Dhikr',
     },
   ];
 
-  getDailyHadith(): IslamicContentItem {
+  public getDailyHadith(): IslamicContentItem {
     const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
     return this.verifiedHadiths[dayOfYear % this.verifiedHadiths.length];
   }
 
-  getDailyDua(): IslamicContentItem {
+  public getDailyDua(): IslamicContentItem {
     const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0).getTime()) / 86400000);
     return this.verifiedDuas[dayOfYear % this.verifiedDuas.length];
   }
 
-  getMorningAdhkar(): IslamicContentItem {
+  public getMorningAdhkar(): IslamicContentItem {
     return this.morningAdhkar[0];
   }
 
-  getEveningAdhkar(): IslamicContentItem {
+  public getEveningAdhkar(): IslamicContentItem {
     return this.eveningAdhkar[0];
   }
 
-  getHajjUmrahGuide(): string {
+  public getJumuahReminder(): IslamicContentItem {
+    return {
+      id: 'jum1',
+      type: 'JUMUAH',
+      title: 'Jumu\'ah Friday Blessings & Salawat',
+      arabicText: 'إِنَّ اللَّهَ وَمَلَائِكَتَهُ يُصَلُّونَ عَلَى النَّبِيِّ يَا أَيُّهَا الَّذِينَ آمَنُوا صَلُّوا عَلَيْهِ وَسَلِّمُوا تَسْلِيمًا',
+      transliteration: "Innallaha wa mala'ikatahu yusalluna 'alan-Nabi, ya ayyuhalladhina amanu sallu 'alayhi wa sallimu taslima",
+      translation: 'Indeed, Allah and His angels send blessings upon the Prophet. O you who have believed, ask Allah to send blessings upon him and salute him with worthiness.',
+      sourceCollection: 'Holy Qur\'an',
+      sourceReference: 'Surah Al-Ahzab (33:56)',
+      authenticityStatus: 'QURANIC',
+      topic: 'Friday Salawat',
+    };
+  }
+
+  public getHajjUmrahGuide(): string {
     return `🕋 HAJJ & UMRAH EDUCATIONAL GUIDE
 ━━━━━━━━━━━━━━━━━━
 📌 STEPS OF UMRAH:
